@@ -43,9 +43,9 @@ def search_code(token: str, query: str, org: str) -> dict:
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
     }
-    resp = requests.get(
-        API_URL, params={"q": full_query, "per_page": PER_PAGE}, headers=headers, timeout=30
-    )
+    # Must use raw URL, NOT params dict — requests encodes '+' as '%2B' which breaks GitHub search
+    url = f"{API_URL}?q={full_query}&per_page={PER_PAGE}"
+    resp = requests.get(url, headers=headers, timeout=30)
     data = resp.json()
 
     if resp.status_code == 403 or "rate limit" in data.get("message", "").lower():
