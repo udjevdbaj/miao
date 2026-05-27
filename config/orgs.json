@@ -2,17 +2,28 @@
   "vendors": [
     {
       "name": "ByteDance",
-      "orgs": ["bytedance", "ByteDance-Seed", "volcengine", "larksuite", "tiktok", "StarRocks"]
+      "orgs": [
+        "bytedance", "ByteDance-Seed", "volcengine", "larksuite", "tiktok", "StarRocks",
+        "cloudwego", "kubewharf", "web-infra-dev", "btraceio", "VisActor",
+        "verl-project", "aibrix", "rstackjs", "arco-design"
+      ]
     },
     {
       "name": "Baidu",
-      "orgs": ["baidu", "PaddlePaddle", "ApolloAuto", "baidubce", "baidu-research"]
+      "orgs": ["baidu", "PaddlePaddle", "ApolloAuto", "baidubce", "baidu-research", "xuperchain", "swan-team"]
     },
     {
       "name": "Tencent",
       "orgs": [
-        "tencent", "TencentCloud", "tencentmusic", "WeBank", "wechat",
-        "TarsCloud", "TencentBlueKing", "TencentARC", "TencentYoutuLab"
+        "tencent", "TencentCloud", "tencentmusic", "TarsCloud",
+        "TencentBlueKing", "TencentARC", "TencentOpen",
+        "TencentYoutuResearch", "tencentyun", "tkestack",
+        "tke-apps", "tke-networking", "kubernetes-manifests",
+        "tencentess", "Tencent-CloudEDU", "ServerlessCN",
+        "coding", "cloudnativeto", "Vbytes",
+        "bkdevops-projects", "ci-plugins",
+        "WeBankPartners", "WeBankBlockchain", "WeBankFinTech", "FederatedAI",
+        "node-webot"
       ]
     },
     {
@@ -25,12 +36,19 @@
         "pouchcontainer", "eggjs", "macacajs", "ice-lab", "midwayjs",
         "taobao", "dingtalk", "alipay", "dragonwell-project", "ApsaraDB",
         "sofastack", "AlibabaCloudDocs", "Alibaba-NLP", "ant-design", "antvis",
-        "seata", "nacos-group"
+        "seata", "nacos-group",
+        "oam-dev", "chaosblade-io", "openkraken", "openyurtio",
+        "fluid-cloudnative", "kubedl-io"
       ]
     },
     {
       "name": "Huawei",
-      "orgs": ["huawei-cloud", "huaweicloud", "openharmony", "openeuler", "mindspore"]
+      "orgs": [
+        "huawei-cloud", "huaweicloud", "openharmony", "openeuler", "mindspore",
+        "volcano-sh", "karmada-io", "kubeedge", "modelbox-ai", "openGemini",
+        "opentiny", "kappital", "kmesh-net", "kuasar-io", "kurator-dev",
+        "DevCloudFE", "huawei-noah", "sodafoundation"
+      ]
     }
   ],
   "queries": [
