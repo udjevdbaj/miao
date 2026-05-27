@@ -19,8 +19,9 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 
-SMTP_HOST = "smtp-mail.outlook.com"
-SMTP_PORT = 587
+SMTP_HOST = "smtp.qq.com"
+SMTP_PORT = 465
+SMTP_USE_SSL = True
 
 
 def build_html_email(results: dict, summary_text: str = "") -> str:
@@ -142,8 +143,7 @@ def send_email(smtp_user: str, smtp_pass: str, to_addr: str, subject: str, html_
     msg["Subject"] = subject
     msg.attach(MIMEText(html_body, "html"))
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
         server.login(smtp_user, smtp_pass)
         server.sendmail(smtp_user, [to_addr], msg.as_string())
 
