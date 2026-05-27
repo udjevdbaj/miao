@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Email notification for CI/CD security scan results.
 
-Sends an HTML email via Outlook SMTP with scan results.
-Only sends if new repos are found (or always if --always flag is set).
+Sends an HTML email via QQ SMTP with ALL scan results.
+New repos are highlighted in red.
 
 Usage:
     python notify.py --input scan_results.json [--always] [--summary scan_summary.txt]
@@ -13,7 +13,7 @@ import json
 import os
 import smtplib
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -21,113 +21,104 @@ from pathlib import Path
 
 SMTP_HOST = "smtp.qq.com"
 SMTP_PORT = 465
-SMTP_USE_SSL = True
 
 
-def build_html_email(results: dict, summary_text: str = "") -> str:
+def build_html_email(results: dict) -> str:
     """Build HTML email body from scan results."""
-    scan_time = results.get("scan_time", datetime.utcnow().isoformat())
+    scan_time = results.get("scan_time", datetime.now(timezone.utc).isoformat())
+    all_repos = results.get("all_repos", [])
     new_repos = results.get("new_repos", [])
-    details = results.get("details", [])
     errors = results.get("errors", [])
+    total_repos = results.get("total_repos", 0)
 
     has_new = len(new_repos) > 0
     status_color = "#dc3545" if has_new else "#28a745"
-    status_text = f"NEW REPOS DETECTED ({len(new_repos)})" if has_new else "No new repos"
+    status_text = f"{len(new_repos)} NEW REPOS" if has_new else "No new repos"
 
-    rows = ""
-    for nr in new_repos:
-        rows += f"""
-        <tr>
-            <td>{nr['vendor']}</td>
-            <td><a href="https://github.com/{nr['repo']}">{nr['repo']}</a></td>
-            <td><span style="color:#dc3545;font-weight:bold">{nr['query_type']}</span></td>
-            <td>{'<br>'.join(nr['files'][:3])}</td>
-        </tr>"""
+    # Group all repos by vendor
+    by_vendor = {}
+    for r in all_repos:
+        by_vendor.setdefault(r["vendor"], []).append(r)
 
-    detail_rows = ""
-    for d in details:
-        new_badge = f' <span style="color:#dc3545">[NEW: {len(d.get("new_repos", []))}]</span>' if d.get("new_repos") else ""
-        detail_rows += f"""
-        <tr>
-            <td>{d['vendor']}</td>
-            <td>{d['org']}</td>
-            <td>{d['query_type']}</td>
-            <td>{d['total']}</td>
-            <td>{new_badge}</td>
-        </tr>"""
+    vendor_sections = ""
+    for vendor in sorted(by_vendor.keys()):
+        repos = by_vendor[vendor]
+        # Deduplicate by repo name, merge query types
+        repo_map = {}
+        for r in repos:
+            if r["repo"] not in repo_map:
+                repo_map[r["repo"]] = {"is_new": r["is_new"], "types": set(), "files": r["files"]}
+            repo_map[r["repo"]]["types"].add(r["query_type"])
 
-    error_rows = ""
-    for e in errors:
-        error_rows += f"""
-        <tr>
-            <td>{e['org']}</td>
-            <td>{e['query_type']}</td>
-            <td style="color:#ffc107">{e['error']}</td>
-        </tr>"""
+        rows = ""
+        for repo_name in sorted(repo_map.keys()):
+            info = repo_map[repo_name]
+            new_badge = ' <span style="background:#dc3545;color:white;padding:2px 6px;border-radius:3px;font-size:11px">NEW</span>' if info["is_new"] else ""
+            types_str = ", ".join(sorted(info["types"]))
+            files_str = "<br>".join(info["files"][:2])
+            bg = "#fff3f3" if info["is_new"] else ""
+            rows += f"""
+            <tr style="background:{bg}">
+                <td style="border:1px solid #ddd;padding:6px">
+                    <a href="https://github.com/{repo_name}">{repo_name}</a>{new_badge}
+                </td>
+                <td style="border:1px solid #ddd;padding:6px">{types_str}</td>
+                <td style="border:1px solid #ddd;padding:6px;font-size:12px">{files_str}</td>
+            </tr>"""
 
-    new_repos_section = ""
-    if new_repos:
-        new_repos_section = f"""
-        <h3 style="color:#dc3545">New Repositories Detected</h3>
+        vendor_sections += f"""
+        <h4 style="margin:15px 0 5px 0">{vendor} ({len(repo_map)} repos)</h4>
         <table style="border-collapse:collapse;width:100%;font-size:13px">
             <tr style="background:#f8f9fa">
-                <th style="border:1px solid #ddd;padding:8px;text-align:left">Vendor</th>
-                <th style="border:1px solid #ddd;padding:8px;text-align:left">Repository</th>
-                <th style="border:1px solid #ddd;padding:8px;text-align:left">Query</th>
-                <th style="border:1px solid #ddd;padding:8px;text-align:left">Files</th>
+                <th style="border:1px solid #ddd;padding:6px;text-align:left">Repository</th>
+                <th style="border:1px solid #ddd;padding:6px;text-align:left">Trigger Types</th>
+                <th style="border:1px solid #ddd;padding:6px;text-align:left">Workflow Files</th>
             </tr>
             {rows}
         </table>"""
 
-    details_section = ""
-    if details:
-        details_section = f"""
-        <h3>Scan Details</h3>
-        <table style="border-collapse:collapse;width:100%;font-size:13px">
-            <tr style="background:#f8f9fa">
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Vendor</th>
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Org</th>
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Type</th>
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Count</th>
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">New</th>
-            </tr>
-            {detail_rows}
-        </table>"""
-
     errors_section = ""
     if errors:
+        error_rows = ""
+        for e in errors:
+            error_rows += f"""
+            <tr>
+                <td style="border:1px solid #ddd;padding:4px">{e['org']}</td>
+                <td style="border:1px solid #ddd;padding:4px">{e['query_type']}</td>
+                <td style="border:1px solid #ddd;padding:4px;color:#e67e22">{e['error'][:60]}</td>
+            </tr>"""
         errors_section = f"""
-        <h3 style="color:#ffc107">Errors ({len(errors)})</h3>
-        <table style="border-collapse:collapse;width:100%;font-size:13px">
+        <h4 style="color:#e67e22">Errors ({len(errors)})</h4>
+        <table style="border-collapse:collapse;width:100%;font-size:12px">
             <tr style="background:#f8f9fa">
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Org</th>
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Query</th>
-                <th style="border:1px solid #ddd;padding:6px;text-align:left">Error</th>
+                <th style="border:1px solid #ddd;padding:4px;text-align:left">Org</th>
+                <th style="border:1px solid #ddd;padding:4px;text-align:left">Query</th>
+                <th style="border:1px solid #ddd;padding:4px;text-align:left">Error</th>
             </tr>
             {error_rows}
         </table>"""
 
     html = f"""
     <html>
-    <body style="font-family:Arial,sans-serif;color:#333;max-width:900px;margin:0 auto">
+    <body style="font-family:Arial,sans-serif;color:#333;max-width:950px;margin:0 auto">
         <div style="background:{status_color};color:white;padding:15px;border-radius:5px 5px 0 0">
             <h2 style="margin:0">CI/CD Security Monitor</h2>
-            <p style="margin:5px 0 0 0">{status_text} — {scan_time}</p>
+            <p style="margin:5px 0 0 0">{status_text} — {scan_time[:19]}</p>
         </div>
         <div style="padding:15px;border:1px solid #ddd;border-top:none">
-            <p>
+            <p style="font-size:14px">
+                <strong>Orgs:</strong> {results.get('total_orgs', 0)} |
                 <strong>Queries:</strong> {results.get('total_queries', 0)} |
-                <strong>Results:</strong> {results.get('total_results', 0)} |
-                <strong>New:</strong> <span style="color:{status_color};font-weight:bold">{len(new_repos)}</span> |
+                <strong>Matches:</strong> {results.get('total_results', 0)} |
+                <strong>Repos:</strong> {total_repos} |
+                <strong style="color:{status_color}">New:</strong> {len(new_repos)} |
                 <strong>Errors:</strong> {len(errors)}
             </p>
-            {new_repos_section}
-            {details_section}
+            {vendor_sections}
             {errors_section}
-        </div>
-        <div style="font-size:11px;color:#999;margin-top:10px;text-align:center">
-            CI/CD Security Monitor — Automated scan
+            <p style="font-size:11px;color:#999;margin-top:15px">
+                CI/CD Security Monitor — {results.get('total_orgs', 0)} orgs x {len(set(r.get('query_type','') for r in all_repos)) or 3} queries = {results.get('total_queries', 0)} API calls
+            </p>
         </div>
     </body>
     </html>"""
@@ -136,7 +127,7 @@ def build_html_email(results: dict, summary_text: str = "") -> str:
 
 
 def send_email(smtp_user: str, smtp_pass: str, to_addr: str, subject: str, html_body: str):
-    """Send HTML email via Outlook SMTP."""
+    """Send HTML email via QQ SMTP (SSL)."""
     msg = MIMEMultipart("alternative")
     msg["From"] = smtp_user
     msg["To"] = to_addr
@@ -153,8 +144,7 @@ def send_email(smtp_user: str, smtp_pass: str, to_addr: str, subject: str, html_
 def main():
     parser = argparse.ArgumentParser(description="CI/CD Security Scan Email Notification")
     parser.add_argument("--input", required=True, help="Path to scan_results.json")
-    parser.add_argument("--summary", default="", help="Path to scan_summary.txt")
-    parser.add_argument("--always", action="store_true", help="Send email even if no new repos")
+    parser.add_argument("--always", action="store_true", help="Send email even if no results")
     args = parser.parse_args()
 
     # Load env
@@ -174,20 +164,17 @@ def main():
 
     results = json.loads(results_path.read_text())
     new_count = len(results.get("new_repos", []))
+    total_repos = results.get("total_repos", 0)
 
-    # Skip if no new repos and not --always
-    if new_count == 0 and not args.always:
-        print("No new repos found. Skipping email (use --always to always send).")
+    # Skip if no repos found at all and not --always
+    if total_repos == 0 and not args.always:
+        print("No repos found. Skipping email.")
         return
 
-    # Build email
-    summary_text = ""
-    if args.summary and Path(args.summary).exists():
-        summary_text = Path(args.summary).read_text()
-
-    html = build_html_email(results, summary_text)
-    status = "NEW REPOS DETECTED" if new_count > 0 else "No new repos"
-    subject = f"[CI/CD Monitor] {status} — {new_count} new — {results.get('scan_time', '')[:10]}"
+    # Build and send email
+    html = build_html_email(results)
+    new_tag = f"[{new_count} NEW] " if new_count > 0 else ""
+    subject = f"[CI/CD Monitor] {new_tag}{total_repos} repos — {results.get('scan_time', '')[:10]}"
 
     send_email(smtp_user, smtp_pass, notify_email, subject, html)
 

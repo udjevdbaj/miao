@@ -106,8 +106,11 @@ def run_scan(config: dict, rotator: TokenRotator, baseline: dict, settings: dict
     results = {
         "scan_time": datetime.now(timezone.utc).isoformat(),
         "new_repos": [],
+        "all_repos": [],       # ALL repos found (new + known)
         "total_queries": 0,
         "total_results": 0,
+        "total_orgs": 0,
+        "total_repos": 0,
         "errors": [],
         "details": [],
     }
@@ -117,6 +120,7 @@ def run_scan(config: dict, rotator: TokenRotator, baseline: dict, settings: dict
         print(f"\n>> {vendor_name}")
 
         for org in vendor["orgs"]:
+            results["total_orgs"] += 1
             for q in config["queries"]:
                 results["total_queries"] += 1
                 label = q["name"]
@@ -133,47 +137,63 @@ def run_scan(config: dict, rotator: TokenRotator, baseline: dict, settings: dict
                 total = result.get("total", 0)
                 results["total_results"] += total
 
-                if total > 0:
-                    print(f"  {org} | {label} | {total} results")
-
-                    new_in_query = []
-                    for repo in result.get("repos", {}):
-                        if repo not in baseline:
-                            new_in_query.append(repo)
-                            results["new_repos"].append(
-                                {
-                                    "vendor": vendor_name,
-                                    "org": org,
-                                    "query_type": label,
-                                    "repo": repo,
-                                    "files": result["repos"][repo],
-                                }
-                            )
-
-                    if new_in_query:
-                        print(f"    [NEW] {', '.join(new_in_query)}")
-
-                    results["details"].append(
+                # Always record details, even with 0 results
+                repos_found = result.get("repos", {})
+                new_in_query = []
+                for repo in repos_found:
+                    is_new = repo not in baseline
+                    if is_new:
+                        new_in_query.append(repo)
+                        results["new_repos"].append(
+                            {
+                                "vendor": vendor_name,
+                                "org": org,
+                                "query_type": label,
+                                "repo": repo,
+                                "files": repos_found[repo],
+                            }
+                        )
+                    results["all_repos"].append(
                         {
                             "vendor": vendor_name,
                             "org": org,
                             "query_type": label,
-                            "total": total,
-                            "repos": list(result.get("repos", {}).keys()),
-                            "new_repos": new_in_query,
+                            "repo": repo,
+                            "is_new": is_new,
+                            "files": repos_found[repo],
                         }
                     )
 
+                if total > 0:
+                    print(f"  {org} | {label} | {total} results")
+                    if new_in_query:
+                        print(f"    [NEW] {', '.join(new_in_query)}")
+
+                # Always add detail entry (even 0 results for visibility)
+                results["details"].append(
+                    {
+                        "vendor": vendor_name,
+                        "org": org,
+                        "query_type": label,
+                        "total": total,
+                        "repos": list(repos_found.keys()),
+                        "new_repos": new_in_query,
+                    }
+                )
+
                 time.sleep(sleep_time)
+
+    # Deduplicate repos count
+    unique_repos = set(r["repo"] for r in results["all_repos"])
+    results["total_repos"] = len(unique_repos)
 
     return results
 
 
 def update_baseline(baseline: dict, results: dict) -> dict:
     """Add all discovered repos to baseline."""
-    for detail in results.get("details", []):
-        for repo in detail.get("repos", []):
-            baseline[repo] = True
+    for repo_info in results.get("all_repos", []):
+        baseline[repo_info["repo"]] = True
     baseline["_last_scan"] = results["scan_time"]
     baseline["_scan_count"] = baseline.get("_scan_count", 0) + 1
     return baseline
@@ -184,33 +204,45 @@ def write_summary(results: dict, output_path: str):
     lines = [
         f"CI/CD Security Scan Report — {results['scan_time']}",
         f"{'=' * 60}",
+        f"Orgs scanned: {results['total_orgs']}",
         f"Total queries: {results['total_queries']}",
         f"Total results: {results['total_results']}",
-        f"New repos found: {len(results['new_repos'])}",
+        f"Unique repos: {results['total_repos']}",
+        f"New repos: {len(results['new_repos'])}",
         f"Errors: {len(results['errors'])}",
         "",
     ]
 
     if results["new_repos"]:
-        lines.append("NEW REPOS:")
-        lines.append("-" * 40)
+        lines.append("=" * 60)
+        lines.append(f"NEW REPOS ({len(results['new_repos'])})")
+        lines.append("=" * 60)
         for nr in results["new_repos"]:
             lines.append(
                 f"  [{nr['vendor']}] {nr['repo']} ({nr['query_type']}) — {nr['files']}"
             )
         lines.append("")
 
-    if results["details"]:
-        lines.append("ALL RESULTS:")
-        lines.append("-" * 40)
-        for d in results["details"]:
-            lines.append(f"  [{d['vendor']}] {d['org']} | {d['query_type']} | {d['total']} repos")
-            for r in d.get("new_repos", []):
-                lines.append(f"    [NEW] {r}")
+    if results["all_repos"]:
+        lines.append("=" * 60)
+        lines.append(f"ALL MATCHING REPOS ({results['total_repos']})")
+        lines.append("=" * 60)
+        # Group by vendor
+        by_vendor = {}
+        for r in results["all_repos"]:
+            by_vendor.setdefault(r["vendor"], []).append(r)
+        for vendor, repos in sorted(by_vendor.items()):
+            unique = {r["repo"] for r in repos}
+            lines.append(f"\n  [{vendor}] ({len(unique)} repos)")
+            for repo in sorted(unique):
+                repo_info = next(r for r in repos if r["repo"] == repo)
+                new_flag = " [NEW]" if repo_info["is_new"] else ""
+                types = sorted(set(r["query_type"] for r in repos if r["repo"] == repo))
+                lines.append(f"    {repo}{new_flag} — triggers: {', '.join(types)}")
 
     if results["errors"]:
         lines.append("")
-        lines.append("ERRORS:")
+        lines.append(f"ERRORS ({len(results['errors'])})")
         lines.append("-" * 40)
         for e in results["errors"]:
             lines.append(f"  {e['org']}/{e['query_type']}: {e['error']}")
@@ -262,7 +294,7 @@ def main():
     write_summary(results, args.summary)
 
     print(f"\n{'=' * 60}")
-    print(f"Scan complete: {len(results['new_repos'])} new repos found")
+    print(f"Scan complete: {results['total_repos']} repos, {len(results['new_repos'])} new")
     print(f"Baseline updated: {args.baseline}")
     print(f"Results saved: {args.output}")
 
