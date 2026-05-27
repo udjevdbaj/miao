@@ -66,6 +66,7 @@ jobs:
         run: |
           python scanner/notify.py \
             --input scan_results.json \
+            --summary scan_summary.txt \
             --always
 
       - name: Upload scan artifacts

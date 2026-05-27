@@ -14,8 +14,10 @@ import os
 import smtplib
 import sys
 from datetime import datetime, timezone
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 from pathlib import Path
 
 
@@ -55,7 +57,14 @@ def build_html_email(results: dict) -> str:
             info = repo_map[repo_name]
             new_badge = ' <span style="background:#dc3545;color:white;padding:2px 6px;border-radius:3px;font-size:11px">NEW</span>' if info["is_new"] else ""
             types_str = ", ".join(sorted(info["types"]))
-            files_str = "<br>".join(info["files"][:2])
+            # Show ALL files as clickable links
+            file_links = []
+            for f in info["files"]:
+                file_links.append(
+                    f'<a href="https://github.com/{repo_name}/blob/main/{f}" '
+                    f'style="color:#0366d6;text-decoration:none">{f}</a>'
+                )
+            files_str = "<br>".join(file_links)
             bg = "#fff3f3" if info["is_new"] else ""
             rows += f"""
             <tr style="background:{bg}">
@@ -126,13 +135,31 @@ def build_html_email(results: dict) -> str:
     return html
 
 
-def send_email(smtp_user: str, smtp_pass: str, to_addr: str, subject: str, html_body: str):
-    """Send HTML email via QQ SMTP (SSL)."""
-    msg = MIMEMultipart("alternative")
+def send_email(smtp_user: str, smtp_pass: str, to_addr: str, subject: str, html_body: str, attachments: list[str] = None):
+    """Send HTML email via QQ SMTP (SSL) with optional file attachments."""
+    msg = MIMEMultipart("mixed")
     msg["From"] = smtp_user
     msg["To"] = to_addr
     msg["Subject"] = subject
-    msg.attach(MIMEText(html_body, "html"))
+
+    # HTML body as alternative part
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(html_body, "html"))
+    msg.attach(alt)
+
+    # Attach files
+    if attachments:
+        for filepath in attachments:
+            p = Path(filepath)
+            if not p.exists():
+                print(f"  [WARN] Attachment not found: {filepath}")
+                continue
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(p.read_bytes())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{p.name}"')
+            msg.attach(part)
+            print(f"  Attached: {p.name} ({p.stat().st_size} bytes)")
 
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
         server.login(smtp_user, smtp_pass)
@@ -144,6 +171,7 @@ def send_email(smtp_user: str, smtp_pass: str, to_addr: str, subject: str, html_
 def main():
     parser = argparse.ArgumentParser(description="CI/CD Security Scan Email Notification")
     parser.add_argument("--input", required=True, help="Path to scan_results.json")
+    parser.add_argument("--summary", default=None, help="Path to scan_summary.txt (attached to email)")
     parser.add_argument("--always", action="store_true", help="Send email even if no results")
     args = parser.parse_args()
 
@@ -176,7 +204,12 @@ def main():
     new_tag = f"[{new_count} NEW] " if new_count > 0 else ""
     subject = f"[CI/CD Monitor] {new_tag}{total_repos} repos — {results.get('scan_time', '')[:10]}"
 
-    send_email(smtp_user, smtp_pass, notify_email, subject, html)
+    # Collect attachments
+    attachments = [str(results_path)]
+    if args.summary:
+        attachments.append(args.summary)
+
+    send_email(smtp_user, smtp_pass, notify_email, subject, html, attachments)
 
 
 if __name__ == "__main__":
