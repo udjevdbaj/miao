@@ -36,7 +36,7 @@ jobs:
 
       - name: Run scan
         env:
-          GITHUB_TOKENS: ${{ secrets.GITHUB_TOKENS }}
+          SCAN_TOKENS: ${{ secrets.SCAN_TOKENS }}
         run: |
           python scanner/scan.py \
             --config config/orgs.json \

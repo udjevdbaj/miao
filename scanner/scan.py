@@ -232,13 +232,13 @@ def main():
     settings = config.get("settings", {})
 
     # Load tokens from env
-    tokens_str = os.environ.get("GITHUB_TOKENS", "")
+    tokens_str = os.environ.get("SCAN_TOKENS", "")
     if not tokens_str:
-        print("ERROR: GITHUB_TOKENS environment variable not set")
+        print("ERROR: SCAN_TOKENS environment variable not set")
         sys.exit(1)
     tokens = [t.strip() for t in tokens_str.split(",") if t.strip()]
     if not tokens:
-        print("ERROR: No valid tokens found in GITHUB_TOKENS")
+        print("ERROR: No valid tokens found in SCAN_TOKENS")
         sys.exit(1)
 
     print(f"Loaded {len(tokens)} tokens")
