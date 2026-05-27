@@ -40,7 +40,7 @@
   ],
   "settings": {
     "sleep_between_requests": 8,
-    "max_retries": 3,
-    "rate_limit_wait": 30
+    "max_retries": 5,
+    "rate_limit_wait": 45
   }
 }

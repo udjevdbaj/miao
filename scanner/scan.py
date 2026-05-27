@@ -63,16 +63,24 @@ def search_code(token: str, query: str, org: str) -> dict:
 
 
 def search_with_retry(
-    rotator: TokenRotator, org: str, query: str, max_retries: int = 3, wait: int = 30
+    rotator: TokenRotator, org: str, query: str, max_retries: int = 5, wait: int = 45
 ) -> dict:
-    """Search with automatic token rotation and rate limit retry."""
+    """Search with automatic token rotation and rate limit retry.
+
+    Strategy:
+    - Round-robin through all available tokens
+    - On rate limit: wait + switch to next token
+    - Exponential backoff: 45s, 60s, 75s, 90s, 105s
+    - Up to max_retries attempts (default 5)
+    """
     for attempt in range(1, max_retries + 1):
         token = rotator.next()
         result = search_code(token, query, org)
 
         if result.get("error") == "rate_limited":
-            print(f"  [RATE LIMIT] attempt {attempt}/{max_retries}, waiting {wait}s...")
-            time.sleep(wait)
+            backoff = wait + (attempt - 1) * 15  # 45, 60, 75, 90, 105
+            print(f"  [RATE LIMIT] attempt {attempt}/{max_retries}, token rotated, waiting {backoff}s...")
+            time.sleep(backoff)
             continue
 
         if "error" in result:
