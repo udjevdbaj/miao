@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""CI/CD Self-Hosted Runner Security Scanner.
+
+Scans GitHub organizations for repos with self-hosted runners
+exposed via pull_request_target / pull_request / issue_comment triggers.
+Compares against a baseline file to detect new repos.
+
+Usage:
+    python scan.py --config config/orgs.json --baseline baselines/baseline.json [--output results.json] [--init] [--summary summary.txt]
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+
+API_URL = "https://api.github.com/search/code"
+PER_PAGE = 100
+
+
+class TokenRotator:
+    """Round-robin token rotation with rate limit awareness."""
+
+    def __init__(self, tokens: list[str]):
+        self.tokens = tokens
+        self.idx = 0
+
+    def next(self) -> str:
+        token = self.tokens[self.idx % len(self.tokens)]
+        self.idx += 1
+        return token
+
+
+def search_code(token: str, query: str, org: str) -> dict:
+    """Execute a single GitHub Code Search API query."""
+    full_query = f"{query}+org:{org}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    resp = requests.get(
+        API_URL, params={"q": full_query, "per_page": PER_PAGE}, headers=headers, timeout=30
+    )
+    data = resp.json()
+
+    if resp.status_code == 403 or "rate limit" in data.get("message", "").lower():
+        return {"error": "rate_limited"}
+
+    if "total_count" not in data:
+        return {"error": data.get("message", "unknown")[:80]}
+
+    repos = {}
+    for item in data.get("items", []):
+        repo = item["repository"]["full_name"]
+        repos.setdefault(repo, []).append(item["path"])
+
+    return {"total": data["total_count"], "repos": repos}
+
+
+def search_with_retry(
+    rotator: TokenRotator, org: str, query: str, max_retries: int = 3, wait: int = 30
+) -> dict:
+    """Search with automatic token rotation and rate limit retry."""
+    for attempt in range(1, max_retries + 1):
+        token = rotator.next()
+        result = search_code(token, query, org)
+
+        if result.get("error") == "rate_limited":
+            print(f"  [RATE LIMIT] attempt {attempt}/{max_retries}, waiting {wait}s...")
+            time.sleep(wait)
+            continue
+
+        if "error" in result:
+            print(f"  [ERROR] {result['error']} — {org}")
+            return result
+
+        return result
+
+    return {"error": "max_retries_exceeded"}
+
+
+def load_baseline(path: str) -> dict:
+    """Load baseline JSON file."""
+    p = Path(path)
+    if p.exists():
+        return json.loads(p.read_text())
+    return {}
+
+
+def save_baseline(path: str, data: dict):
+    """Save baseline JSON file."""
+    Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def run_scan(config: dict, rotator: TokenRotator, baseline: dict, settings: dict) -> dict:
+    """Execute full scan across all configured orgs and queries."""
+    sleep_time = settings.get("sleep_between_requests", 8)
+    max_retries = settings.get("max_retries", 3)
+    rate_limit_wait = settings.get("rate_limit_wait", 30)
+
+    results = {
+        "scan_time": datetime.now(timezone.utc).isoformat(),
+        "new_repos": [],
+        "total_queries": 0,
+        "total_results": 0,
+        "errors": [],
+        "details": [],
+    }
+
+    for vendor in config["vendors"]:
+        vendor_name = vendor["name"]
+        print(f"\n>> {vendor_name}")
+
+        for org in vendor["orgs"]:
+            for q in config["queries"]:
+                results["total_queries"] += 1
+                label = q["name"]
+
+                result = search_with_retry(
+                    rotator, org, q["query"], max_retries, rate_limit_wait
+                )
+
+                if "error" in result:
+                    results["errors"].append({"org": org, "query": label, "error": result["error"]})
+                    time.sleep(sleep_time)
+                    continue
+
+                total = result.get("total", 0)
+                results["total_results"] += total
+
+                if total > 0:
+                    print(f"  {org} | {label} | {total} results")
+
+                    new_in_query = []
+                    for repo in result.get("repos", {}):
+                        if repo not in baseline:
+                            new_in_query.append(repo)
+                            results["new_repos"].append(
+                                {
+                                    "vendor": vendor_name,
+                                    "org": org,
+                                    "query_type": label,
+                                    "repo": repo,
+                                    "files": result["repos"][repo],
+                                }
+                            )
+
+                    if new_in_query:
+                        print(f"    [NEW] {', '.join(new_in_query)}")
+
+                    results["details"].append(
+                        {
+                            "vendor": vendor_name,
+                            "org": org,
+                            "query_type": label,
+                            "total": total,
+                            "repos": list(result.get("repos", {}).keys()),
+                            "new_repos": new_in_query,
+                        }
+                    )
+
+                time.sleep(sleep_time)
+
+    return results
+
+
+def update_baseline(baseline: dict, results: dict) -> dict:
+    """Add all discovered repos to baseline."""
+    for detail in results.get("details", []):
+        for repo in detail.get("repos", []):
+            baseline[repo] = True
+    baseline["_last_scan"] = results["scan_time"]
+    baseline["_scan_count"] = baseline.get("_scan_count", 0) + 1
+    return baseline
+
+
+def write_summary(results: dict, output_path: str):
+    """Write human-readable summary to file."""
+    lines = [
+        f"CI/CD Security Scan Report — {results['scan_time']}",
+        f"{'=' * 60}",
+        f"Total queries: {results['total_queries']}",
+        f"Total results: {results['total_results']}",
+        f"New repos found: {len(results['new_repos'])}",
+        f"Errors: {len(results['errors'])}",
+        "",
+    ]
+
+    if results["new_repos"]:
+        lines.append("NEW REPOS:")
+        lines.append("-" * 40)
+        for nr in results["new_repos"]:
+            lines.append(
+                f"  [{nr['vendor']}] {nr['repo']} ({nr['query_type']}) — {nr['files']}"
+            )
+        lines.append("")
+
+    if results["details"]:
+        lines.append("ALL RESULTS:")
+        lines.append("-" * 40)
+        for d in results["details"]:
+            lines.append(f"  [{d['vendor']}] {d['org']} | {d['query_type']} | {d['total']} repos")
+            for r in d.get("new_repos", []):
+                lines.append(f"    [NEW] {r}")
+
+    if results["errors"]:
+        lines.append("")
+        lines.append("ERRORS:")
+        lines.append("-" * 40)
+        for e in results["errors"]:
+            lines.append(f"  {e['org']}/{e['query_type']}: {e['error']}")
+
+    Path(output_path).write_text("\n".join(lines) + "\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CI/CD Self-Hosted Runner Security Scanner")
+    parser.add_argument("--config", required=True, help="Path to orgs.json config file")
+    parser.add_argument("--baseline", required=True, help="Path to baseline JSON file")
+    parser.add_argument("--output", default="scan_results.json", help="Output results JSON")
+    parser.add_argument("--summary", default="scan_summary.txt", help="Output summary text")
+    parser.add_argument("--init", action="store_true", help="Initialize baseline (no new-repo detection)")
+    args = parser.parse_args()
+
+    # Load config
+    config = json.loads(Path(args.config).read_text())
+    settings = config.get("settings", {})
+
+    # Load tokens from env
+    tokens_str = os.environ.get("GITHUB_TOKENS", "")
+    if not tokens_str:
+        print("ERROR: GITHUB_TOKENS environment variable not set")
+        sys.exit(1)
+    tokens = [t.strip() for t in tokens_str.split(",") if t.strip()]
+    if not tokens:
+        print("ERROR: No valid tokens found in GITHUB_TOKENS")
+        sys.exit(1)
+
+    print(f"Loaded {len(tokens)} tokens")
+    print(f"Scanning {sum(len(v['orgs']) for v in config['vendors'])} orgs across {len(config['vendors'])} vendors")
+    print(f"Queries per org: {len(config['queries'])}")
+
+    rotator = TokenRotator(tokens)
+    baseline = load_baseline(args.baseline)
+
+    # Run scan
+    results = run_scan(config, rotator, baseline, settings)
+
+    # Update baseline with all discovered repos
+    baseline = update_baseline(baseline, results)
+    save_baseline(args.baseline, baseline)
+
+    # Save results
+    Path(args.output).write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n")
+
+    # Write summary
+    write_summary(results, args.summary)
+
+    print(f"\n{'=' * 60}")
+    print(f"Scan complete: {len(results['new_repos'])} new repos found")
+    print(f"Baseline updated: {args.baseline}")
+    print(f"Results saved: {args.output}")
+
+
+if __name__ == "__main__":
+    main()

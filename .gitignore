@@ -1,0 +1,4 @@
+scan_results.json
+scan_summary.txt
+__pycache__/
+*.pyc

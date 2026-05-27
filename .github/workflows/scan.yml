@@ -1,0 +1,79 @@
+name: CI/CD Security Scan
+
+on:
+  schedule:
+    # UTC 5:17 (北京 13:17) 和 UTC 17:17 (北京 1:17)
+    - cron: '17 5,17 * * *'
+  workflow_dispatch:
+    inputs:
+      force_init:
+        description: '重建 baseline（忽略现有基线，全部标记为已知）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Initialize baseline (first run or force)
+        if: ${{ inputs.force_init == true }}
+        run: |
+          echo '{}' > baselines/baseline.json
+          echo "Baseline reset to empty — all repos will be treated as known"
+
+      - name: Run scan
+        env:
+          GITHUB_TOKENS: ${{ secrets.GITHUB_TOKENS }}
+        run: |
+          python scanner/scan.py \
+            --config config/orgs.json \
+            --baseline baselines/baseline.json \
+            --output scan_results.json \
+            --summary scan_summary.txt
+
+      - name: Show summary
+        if: always()
+        run: cat scan_summary.txt
+
+      - name: Commit baseline update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add baselines/baseline.json
+          git diff --cached --quiet || git commit -m "baseline: $(date -u +%Y-%m-%dT%H:%M)"
+          git push
+
+      - name: Send email notification
+        if: always()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          python scanner/notify.py \
+            --input scan_results.json \
+            --summary scan_summary.txt \
+            --always
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            scan_results.json
+            scan_summary.txt
