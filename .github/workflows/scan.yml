@@ -4,7 +4,6 @@ on:
   schedule:
     # 测试：每5分钟触发
     - cron: '*/5 * * * *'
-    timezone: Asia/Shanghai
   workflow_dispatch:
     inputs:
       force_init:
