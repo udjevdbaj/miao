@@ -2,7 +2,7 @@ name: Fresh Schedule Test
 
 on:
   schedule:
-    - cron: '56 * * * *'
+    - cron: '3 13 * * *'
   workflow_dispatch:
 
 jobs:
