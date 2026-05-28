@@ -138,7 +138,7 @@ def run_scan(config: dict, rotator: TokenRotator, baseline: dict, settings: dict
                 )
 
                 if "error" in result:
-                    results["errors"].append({"org": org, "query": label, "error": result["error"]})
+                    results["errors"].append({"org": org, "query_type": label, "error": result["error"]})
                     time.sleep(sleep_time)
                     continue
 
