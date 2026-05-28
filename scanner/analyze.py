@@ -1,0 +1,539 @@
+#!/usr/bin/env python3
+"""Automated CI/CD Workflow Security Analyzer.
+
+Reads scan_results.json, downloads and analyzes every workflow file
+from each matched repo, and produces a detailed security assessment.
+
+Usage:
+    python analyze.py --input scan_results.json --output analysis_report.json [--summary analysis_summary.txt]
+"""
+
+import argparse
+import base64
+import json
+import os
+import re
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+import yaml
+
+API = "https://api.github.com"
+
+
+class TokenRotator:
+    def __init__(self, tokens: list[str]):
+        self.tokens = tokens
+        self.idx = 0
+
+    def next(self) -> str:
+        token = self.tokens[self.idx % len(self.tokens)]
+        self.idx += 1
+        return token
+
+
+def api_get(token: str, url: str, retries: int = 3) -> dict | list | None:
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, timeout=60)
+            if resp.status_code == 403:
+                reset = int(resp.headers.get("X-RateLimit-Reset", 0))
+                wait = max(reset - int(time.time()), 10)
+                print(f"    [RATE LIMIT] waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            if resp.status_code == 404:
+                return None
+            if resp.status_code != 200:
+                return None
+            return resp.json()
+        except requests.exceptions.RequestException:
+            if attempt < retries - 1:
+                time.sleep(3)
+    return None
+
+
+def get_workflow_files(token: str, repo: str) -> dict[str, str]:
+    """Download all workflow files from a repo. Returns {filename: content}."""
+    files = {}
+    data = api_get(token, f"{API}/repos/{repo}/contents/.github/workflows")
+    if not data or not isinstance(data, list):
+        return files
+
+    for item in data:
+        if not isinstance(item, dict) or not item.get("name", "").endswith((".yml", ".yaml")):
+            continue
+        name = item["name"]
+        content_data = api_get(token, f"{API}/repos/{repo}/contents/.github/workflows/{name}")
+        if content_data and isinstance(content_data, dict) and content_data.get("content"):
+            try:
+                content = base64.b64decode(content_data["content"]).decode("utf-8", errors="replace")
+                files[name] = content
+            except Exception:
+                pass
+        time.sleep(0.3)
+    return files
+
+
+def check_none_approval(token: str, repo: str, max_pages: int = 3) -> dict:
+    """Check if NONE users ever had PR workflow runs approved/completed."""
+    result = {"has_none_precedent": False, "none_users": [], "total_pr_runs": 0}
+
+    for page in range(1, max_pages + 1):
+        data = api_get(token, f"{API}/repos/{repo}/actions/runs?per_page=100&event=pull_request&page={page}")
+        if not data or not isinstance(data, dict):
+            break
+        runs = data.get("workflow_runs", [])
+        result["total_pr_runs"] += len(runs)
+        if not runs:
+            break
+
+        for run in runs:
+            actor = run.get("actor", {}).get("login", "")
+            conclusion = run.get("conclusion", "")
+            # Check the PR author for each run
+            pr_url = run.get("pull_requests", [{}])
+            if isinstance(pr_url, list) and pr_url:
+                pr_info = pr_url[0]
+            else:
+                continue
+
+        time.sleep(0.5)
+
+    # Also check via pulls API for NONE authors with completed CI
+    pulls_data = api_get(token, f"{API}/repos/{repo}/pulls?state=all&per_page=50")
+    if pulls_data and isinstance(pulls_data, list):
+        for pr in pulls_data:
+            if pr.get("author_association") == "NONE":
+                pr_number = pr.get("number")
+                pr_state = pr.get("state")
+                merged = pr.get("merged", False)
+                # Check if this PR had CI runs
+                runs_data = api_get(token, f"{API}/repos/{repo}/actions/runs?event=pull_request&per_page=10")
+                if runs_data and isinstance(runs_data, dict):
+                    for run in runs_data.get("workflow_runs", []):
+                        if run.get("conclusion") in ("success", "completed"):
+                            head_branch = run.get("head_branch", "")
+                            # Rough match: if a NONE user's PR triggered a successful run
+                            result["has_none_precedent"] = True
+                            result["none_users"].append(pr.get("user", {}).get("login", "unknown"))
+                            break
+                time.sleep(0.3)
+                if result["has_none_precedent"]:
+                    break
+
+    return result
+
+
+def analyze_workflow(filename: str, content: str) -> dict:
+    """Parse a single workflow file and extract security-relevant info."""
+    result = {
+        "file": filename,
+        "triggers": [],
+        "trigger_types": [],
+        "label_gate": None,
+        "user_gate": None,
+        "jobs": [],
+        "secrets_used": set(),
+        "runner_types": set(),
+        "checkout_pr_code": False,
+        "expression_injection": [],
+        "permissions": None,
+        "risk_score": 0,
+        "verdict": "UNKNOWN",
+        "details": [],
+    }
+
+    try:
+        wf = yaml.safe_load(content)
+    except Exception:
+        result["details"].append("Failed to parse YAML")
+        return result
+
+    if not isinstance(wf, dict):
+        return result
+
+    # ── Triggers ──
+    on_section = wf.get("on", wf.get(True, {}))
+    if isinstance(on_section, str):
+        result["triggers"].append(on_section)
+        result["trigger_types"].append(on_section)
+    elif isinstance(on_section, list):
+        for t in on_section:
+            result["triggers"].append(str(t))
+            result["trigger_types"].append(str(t))
+    elif isinstance(on_section, dict):
+        for trigger, config in on_section.items():
+            trigger_info = {"name": trigger}
+            if isinstance(config, dict):
+                if trigger == "pull_request_target":
+                    types_list = config.get("types", [])
+                    trigger_info["types"] = types_list
+                    if "labeled" in types_list:
+                        result["label_gate"] = True
+                        result["details"].append(f"PRT trigger with 'labeled' type — label gate active")
+                branches = config.get("branches", [])
+                if branches:
+                    trigger_info["branches"] = branches
+            result["triggers"].append(trigger_info)
+            result["trigger_types"].append(trigger)
+
+    has_prt = "pull_request_target" in result["trigger_types"]
+    has_pr = "pull_request" in result["trigger_types"]
+    has_ic = "issue_comment" in result["trigger_types"]
+
+    # ── Permissions ──
+    perms = wf.get("permissions", None)
+    if perms:
+        result["permissions"] = perms
+
+    # ── Raw content analysis (more reliable than YAML for GHA expressions) ──
+    raw = content
+
+    # Secrets usage
+    secrets_found = re.findall(r"\$\{\{\s*secrets\.(\w+)\s*\}\}", raw)
+    result["secrets_used"] = set(secrets_found)
+
+    # Expression injection patterns
+    injections = re.findall(r"\$\{\{\s*github\.event\.([^\}]+)\}\}", raw)
+    result["expression_injection"] = injections
+
+    # Check for comment.body injection in run: blocks
+    if "comment.body" in raw:
+        # Check if it's in an if: condition (safe) or run: block (dangerous)
+        lines = raw.split("\n")
+        for i, line in enumerate(lines):
+            if "comment.body" in line:
+                stripped = line.strip()
+                if stripped.startswith("run:"):
+                    result["details"].append("⚠️ comment.body in run: block — SCRIPT INJECTION RISK")
+                    result["risk_score"] += 30
+                elif stripped.startswith("- ") and "run:" in lines[max(0, i-1)] if i > 0 else False:
+                    result["details"].append("⚠️ comment.body near run: block — check for injection")
+                    result["risk_score"] += 15
+
+    # ── Jobs ──
+    jobs = wf.get("jobs", {})
+    if isinstance(jobs, dict):
+        for job_name, job in jobs.items():
+            if not isinstance(job, dict):
+                continue
+
+            job_info = {"name": job_name}
+
+            # Runner type
+            runs_on = job.get("runs-on", "")
+            if isinstance(runs_on, str):
+                job_info["runs_on"] = runs_on
+                if "self-hosted" in runs_on.lower():
+                    result["runner_types"].add("self-hosted")
+                else:
+                    result["runner_types"].add(f"github-hosted({runs_on})")
+            elif isinstance(runs_on, list):
+                runners = [str(r) for r in runs_on]
+                job_info["runs_on"] = runners
+                if any("self-hosted" in str(r).lower() for r in runs_on):
+                    result["runner_types"].add("self-hosted")
+                else:
+                    result["runner_types"].add("github-hosted")
+            elif isinstance(runs_on, dict):
+                # group: xxx format
+                group = runs_on.get("group", "")
+                job_info["runs_on"] = f"group:{group}"
+                result["runner_types"].add(f"group:{group}")
+
+            # If condition (gates)
+            if_condition = job.get("if", "")
+            if if_condition:
+                job_info["if"] = str(if_condition)
+                # Check for label gates
+                if "label" in str(if_condition).lower():
+                    result["label_gate"] = True
+                    result["details"].append(f"Job '{job_name}' has label gate: {str(if_condition)[:80]}")
+                # Check for user gates
+                if "actor" in str(if_condition).lower() or "user.login" in str(if_condition):
+                    result["user_gate"] = True
+                    result["details"].append(f"Job '{job_name}' has user gate: {str(if_condition)[:80]}")
+                # Check for comment.user gates
+                if "comment.user" in str(if_condition) or "comment.user.login" in str(if_condition):
+                    result["user_gate"] = True
+
+            # Steps analysis
+            steps = job.get("steps", [])
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+
+                # Checkout analysis
+                uses = step.get("uses", "")
+                if "actions/checkout" in uses:
+                    with_config = step.get("with", {})
+                    ref = with_config.get("ref", "")
+                    if any(x in ref for x in ["pull_request", "head.sha", "pull/", "merge"]):
+                        result["checkout_pr_code"] = True
+                        job_info["checkout_pr_code"] = True
+                        result["details"].append(f"Checkout PR code: ref={ref}")
+
+                    # Check if persist-credentials is false
+                    persist = with_config.get("persist-credentials", True)
+
+            result["jobs"].append(job_info)
+
+    # ── Risk Scoring ──
+    has_self_hosted = "self-hosted" in result["runner_types"]
+    is_github_hosted = any("github-hosted" in r for r in result["runner_types"])
+    is_runner_group = any("group:" in r for r in result["runner_types"])
+
+    if has_prt and has_self_hosted:
+        if result["label_gate"]:
+            result["risk_score"] += 40
+            result["verdict"] = "POTENTIAL (label gate required)"
+        else:
+            result["risk_score"] += 80
+            result["verdict"] = "CRITICAL (0-click RCE possible)"
+
+    if has_ic and has_self_hosted:
+        if result["user_gate"]:
+            result["risk_score"] += 30
+            result["verdict"] = "POTENTIAL (user gate)"
+        else:
+            result["risk_score"] += 70
+            result["verdict"] = "HIGH (0-click script injection)"
+
+    if has_pr and has_self_hosted:
+        result["risk_score"] += 20
+        if result["verdict"] == "UNKNOWN":
+            result["verdict"] = "MEDIUM (needs approval)"
+
+    if result["checkout_pr_code"]:
+        result["risk_score"] += 15
+
+    if result["secrets_used"]:
+        result["risk_score"] += 10 * min(len(result["secrets_used"]), 5)
+        result["details"].append(f"Secrets exposed: {', '.join(sorted(result['secrets_used']))}")
+
+    if is_github_hosted and not has_self_hosted:
+        result["risk_score"] = 0
+        result["verdict"] = "SAFE (GitHub-hosted)"
+
+    if is_runner_group:
+        # Runner groups could be GitHub-hosted larger runners
+        result["details"].append("Note: runner group may be GitHub-hosted larger runner — verify manually")
+
+    if not has_self_hosted and not is_runner_group:
+        result["verdict"] = "SAFE"
+
+    return result
+
+
+def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str]) -> dict:
+    """Full analysis of a single repo."""
+    token = rotator.next()
+    result = {
+        "repo": repo,
+        "trigger_types": trigger_types,
+        "workflows": [],
+        "has_self_hosted": False,
+        "has_prt": False,
+        "has_ic": False,
+        "secrets_total": set(),
+        "highest_risk": 0,
+        "verdict": "UNKNOWN",
+        "none_approval": None,
+    }
+
+    print(f"  Analyzing {repo}...", end=" ", flush=True)
+
+    # Download workflow files
+    wf_files = get_workflow_files(token, repo)
+    if not wf_files:
+        print("no workflow files found")
+        result["verdict"] = "NO_WORKFLOWS"
+        return result
+
+    # Analyze each file
+    for filename, content in wf_files.items():
+        analysis = analyze_workflow(filename, content)
+        result["workflows"].append(analysis)
+
+        if "self-hosted" in analysis["runner_types"]:
+            result["has_self_hosted"] = True
+        if "pull_request_target" in analysis["trigger_types"]:
+            result["has_prt"] = True
+        if "issue_comment" in analysis["trigger_types"]:
+            result["has_ic"] = True
+        result["secrets_total"].update(analysis["secrets_used"])
+        if analysis["risk_score"] > result["highest_risk"]:
+            result["highest_risk"] = analysis["risk_score"]
+            result["verdict"] = analysis["verdict"]
+
+    # For PR-only repos with self-hosted, check NONE user approval history
+    if result["has_self_hosted"] and not result["has_prt"] and not result["has_ic"]:
+        token = rotator.next()
+        result["none_approval"] = check_none_approval(token, repo)
+        if not result["none_approval"]["has_none_precedent"]:
+            if result["verdict"] == "MEDIUM (needs approval)":
+                result["verdict"] = "NOT EXPLOITABLE (no NONE approval precedent)"
+                result["highest_risk"] = max(0, result["highest_risk"] - 15)
+
+    verdict_short = result["verdict"][:40]
+    print(f"{len(wf_files)} files → {verdict_short}")
+
+    return result
+
+
+def run_analysis(scan_results: dict, rotator: TokenRotator) -> dict:
+    """Analyze all repos from scan results."""
+    all_repos = scan_results.get("all_repos", [])
+
+    # Deduplicate repos
+    repo_map = {}
+    for r in all_repos:
+        repo = r["repo"]
+        if repo not in repo_map:
+            repo_map[repo] = {"trigger_types": set(), "vendor": r.get("vendor", "")}
+        repo_map[repo]["trigger_types"].add(r.get("query_type", ""))
+
+    print(f"Analyzing {len(repo_map)} repos...\n")
+
+    results = []
+    for repo, info in sorted(repo_map.items()):
+        result = analyze_repo(rotator, repo, sorted(info["trigger_types"]))
+        result["vendor"] = info["vendor"]
+        results.append(result)
+        time.sleep(1)
+
+    # Sort by risk score
+    results.sort(key=lambda x: x["highest_risk"], reverse=True)
+
+    return {
+        "analysis_time": datetime.now(timezone.utc).isoformat(),
+        "total_repos": len(results),
+        "results": results,
+        "summary": generate_summary(results),
+    }
+
+
+def generate_summary(results: list[dict]) -> dict:
+    """Generate summary statistics."""
+    summary = {
+        "critical": [],
+        "high": [],
+        "potential": [],
+        "not_exploitable": [],
+        "safe": [],
+        "github_hosted": [],
+    }
+
+    for r in results:
+        verdict = r["verdict"]
+        entry = {
+            "repo": r["repo"],
+            "vendor": r.get("vendor", ""),
+            "risk_score": r["highest_risk"],
+            "verdict": verdict,
+            "triggers": r["trigger_types"],
+            "has_self_hosted": r["has_self_hosted"],
+            "secrets": sorted(r["secrets_total"]) if r["secrets_total"] else [],
+        }
+
+        if "CRITICAL" in verdict:
+            summary["critical"].append(entry)
+        elif "HIGH" in verdict:
+            summary["high"].append(entry)
+        elif "POTENTIAL" in verdict or "MEDIUM" in verdict:
+            summary["potential"].append(entry)
+        elif "NOT EXPLOITABLE" in verdict:
+            summary["not_exploitable"].append(entry)
+        elif "SAFE" in verdict or "GITHUB" in verdict.upper():
+            summary["github_hosted"].append(entry)
+        else:
+            summary["safe"].append(entry)
+
+    return summary
+
+
+def write_report(analysis: dict, output_path: str):
+    """Write detailed analysis report."""
+    # Clean sets for JSON serialization
+    for r in analysis["results"]:
+        r["secrets_total"] = sorted(r["secrets_total"]) if r["secrets_total"] else []
+        for wf in r["workflows"]:
+            wf["secrets_used"] = sorted(wf["secrets_used"]) if wf["secrets_used"] else []
+            wf["runner_types"] = sorted(wf["runner_types"]) if wf["runner_types"] else []
+
+    Path(output_path).write_text(json.dumps(analysis, indent=2, ensure_ascii=False) + "\n")
+
+
+def write_summary_txt(analysis: dict, output_path: str):
+    """Write human-readable summary."""
+    summary = analysis["summary"]
+    lines = [
+        f"CI/CD Workflow Security Analysis Report — {analysis['analysis_time']}",
+        f"{'=' * 70}",
+        f"Total repos analyzed: {analysis['total_repos']}",
+        f"CRITICAL (0-click RCE): {len(summary['critical'])}",
+        f"HIGH (0-click injection): {len(summary['high'])}",
+        f"POTENTIAL (gate required): {len(summary['potential'])}",
+        f"NOT EXPLOITABLE: {len(summary['not_exploitable'])}",
+        f"SAFE/GitHub-hosted: {len(summary['github_hosted']) + len(summary['safe'])}",
+        "",
+    ]
+
+    for category, label in [
+        ("critical", "CRITICAL — 0-Click RCE"),
+        ("high", "HIGH — 0-Click Script Injection"),
+        ("potential", "POTENTIAL — Gate Required"),
+        ("not_exploitable", "NOT EXPLOITABLE"),
+    ]:
+        items = summary.get(category, [])
+        if not items:
+            continue
+        lines.append(f"{'=' * 70}")
+        lines.append(f"{label} ({len(items)})")
+        lines.append(f"{'=' * 70}")
+        for item in items:
+            secrets_str = f" | secrets: {', '.join(item['secrets'])}" if item["secrets"] else ""
+            lines.append(f"  {item['repo']} ({item['vendor']})")
+            lines.append(f"    triggers: {', '.join(item['triggers'])} | risk={item['risk_score']}{secrets_str}")
+            lines.append(f"    verdict: {item['verdict']}")
+            lines.append("")
+
+    Path(output_path).write_text("\n".join(lines) + "\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CI/CD Workflow Security Analyzer")
+    parser.add_argument("--input", required=True, help="Path to scan_results.json")
+    parser.add_argument("--output", default="analysis_report.json", help="Output analysis JSON")
+    parser.add_argument("--summary", default="analysis_summary.txt", help="Output summary text")
+    args = parser.parse_args()
+
+    tokens_str = os.environ.get("SCAN_TOKENS", "")
+    if not tokens_str:
+        print("ERROR: SCAN_TOKENS environment variable not set")
+        sys.exit(1)
+    tokens = [t.strip() for t in tokens_str.split(",") if t.strip()]
+    rotator = TokenRotator(tokens)
+
+    scan_results = json.loads(Path(args.input).read_text())
+    analysis = run_analysis(scan_results, rotator)
+
+    write_report(analysis, args.output)
+    write_summary_txt(analysis, args.summary)
+
+    print(f"\n{'=' * 70}")
+    print(f"Analysis complete: {analysis['total_repos']} repos")
+    s = analysis["summary"]
+    print(f"  CRITICAL: {len(s['critical'])} | HIGH: {len(s['high'])} | POTENTIAL: {len(s['potential'])} | NOT EXPLOITABLE: {len(s['not_exploitable'])}")
+    print(f"  Report: {args.output}")
+    print(f"  Summary: {args.summary}")
+
+
+if __name__ == "__main__":
+    main()
