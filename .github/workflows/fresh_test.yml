@@ -1,0 +1,12 @@
+name: Fresh Schedule Test
+
+on:
+  schedule:
+    - cron: '56 * * * *'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Fresh schedule triggered at $(date -u)"
