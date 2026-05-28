@@ -2,8 +2,8 @@ name: CI/CD Security Scan
 
 on:
   schedule:
-    # UTC 5:23 (北京 13:23) 和 UTC 17:23 (北京 1:23)
-    - cron: '23 5,17 * * *'
+    # UTC 12:17 (北京 20:17) — 验证 schedule 是否生效
+    - cron: '17 12 * * *'
   workflow_dispatch:
     inputs:
       force_init:
