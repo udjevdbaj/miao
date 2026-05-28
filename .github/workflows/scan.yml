@@ -2,8 +2,9 @@ name: CI/CD Security Scan
 
 on:
   schedule:
-    # 测试：每3分钟触发
-    - cron: '*/3 * * * *'
+    # 测试：每5分钟触发
+    - cron: '*/5 * * * *'
+    timezone: Asia/Shanghai
   workflow_dispatch:
     inputs:
       force_init:
