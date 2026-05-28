@@ -26,7 +26,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests pyyaml
 
       - name: Initialize baseline (first run or force)
         if: ${{ inputs.force_init == true }}
@@ -47,6 +47,20 @@ jobs:
       - name: Show summary
         if: always()
         run: cat scan_summary.txt
+
+      - name: Run automated analysis
+        if: always()
+        env:
+          SCAN_TOKENS: ${{ secrets.SCAN_TOKENS }}
+        run: |
+          python scanner/analyze.py \
+            --input scan_results.json \
+            --output analysis_report.json \
+            --summary analysis_summary.txt
+
+      - name: Show analysis
+        if: always()
+        run: cat analysis_summary.txt
 
       - name: Commit baseline update
         run: |
@@ -69,6 +83,18 @@ jobs:
             --summary scan_summary.txt \
             --always
 
+      - name: Send analysis notification
+        if: always()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          python scanner/notify.py \
+            --input analysis_report.json \
+            --summary analysis_summary.txt \
+            --always
+
       - name: Upload scan artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -78,3 +104,5 @@ jobs:
           path: |
             scan_results.json
             scan_summary.txt
+            analysis_report.json
+            analysis_summary.txt
