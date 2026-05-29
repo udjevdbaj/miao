@@ -90,7 +90,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: |
-          python scanner/notify.py \
+          python scanner/analysis_notify.py \
             --input analysis_report.json \
             --summary analysis_summary.txt \
             --always
