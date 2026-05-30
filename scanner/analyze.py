@@ -15,7 +15,6 @@ import os
 import re
 import sys
 import time
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -81,11 +80,35 @@ def get_workflow_files(token: str, repo: str) -> dict[str, str]:
 
 
 def check_none_approval(token: str, repo: str, max_pages: int = 3) -> dict:
-    """Check if NONE users ever had PR workflow runs approved/completed."""
+    """Check if NONE users ever had PR workflow runs approved/completed.
+
+    Strategy:
+    1. Collect PR numbers from NONE-authors via pulls API
+    2. Page through workflow runs (event=pull_request), match by PR number
+       via the run's pull_requests[].number field
+    3. If any NONE-author's PR has a completed/successful run → precedent confirmed
+    """
     result = {"has_none_precedent": False, "none_users": [], "total_pr_runs": 0}
 
+    # Step 1: Find all NONE-author PR numbers
+    none_pr_numbers: dict[int, str] = {}  # {pr_number: username}
+    pulls_data = api_get(token, f"{API}/repos/{repo}/pulls?state=all&per_page=100")
+    if pulls_data and isinstance(pulls_data, list):
+        for pr in pulls_data:
+            if pr.get("author_association") == "NONE":
+                num = pr.get("number")
+                login = pr.get("user", {}).get("login", "unknown")
+                if num:
+                    none_pr_numbers[num] = login
+    if not none_pr_numbers:
+        return result
+
+    # Step 2: Match workflow runs to NONE-author PRs via pull_requests field
     for page in range(1, max_pages + 1):
-        data = api_get(token, f"{API}/repos/{repo}/actions/runs?per_page=100&event=pull_request&page={page}")
+        data = api_get(
+            token,
+            f"{API}/repos/{repo}/actions/runs?per_page=100&event=pull_request&page={page}",
+        )
         if not data or not isinstance(data, dict):
             break
         runs = data.get("workflow_runs", [])
@@ -94,38 +117,18 @@ def check_none_approval(token: str, repo: str, max_pages: int = 3) -> dict:
             break
 
         for run in runs:
-            actor = run.get("actor", {}).get("login", "")
-            conclusion = run.get("conclusion", "")
-            # Check the PR author for each run
-            pr_url = run.get("pull_requests", [{}])
-            if isinstance(pr_url, list) and pr_url:
-                pr_info = pr_url[0]
-            else:
+            if run.get("conclusion") not in ("success", "completed"):
                 continue
-
+            # Each run has a pull_requests list; check if any matches a NONE PR
+            for pr_ref in run.get("pull_requests", []):
+                pr_number = pr_ref.get("number")
+                if pr_number in none_pr_numbers:
+                    username = none_pr_numbers[pr_number]
+                    result["has_none_precedent"] = True
+                    if username not in result["none_users"]:
+                        result["none_users"].append(username)
+                    return result  # One precedent is enough
         time.sleep(0.5)
-
-    # Also check via pulls API for NONE authors with completed CI
-    pulls_data = api_get(token, f"{API}/repos/{repo}/pulls?state=all&per_page=50")
-    if pulls_data and isinstance(pulls_data, list):
-        for pr in pulls_data:
-            if pr.get("author_association") == "NONE":
-                pr_number = pr.get("number")
-                pr_state = pr.get("state")
-                merged = pr.get("merged", False)
-                # Check if this PR had CI runs
-                runs_data = api_get(token, f"{API}/repos/{repo}/actions/runs?event=pull_request&per_page=10")
-                if runs_data and isinstance(runs_data, dict):
-                    for run in runs_data.get("workflow_runs", []):
-                        if run.get("conclusion") in ("success", "completed"):
-                            head_branch = run.get("head_branch", "")
-                            # Rough match: if a NONE user's PR triggered a successful run
-                            result["has_none_precedent"] = True
-                            result["none_users"].append(pr.get("user", {}).get("login", "unknown"))
-                            break
-                time.sleep(0.3)
-                if result["has_none_precedent"]:
-                    break
 
     return result
 
@@ -203,19 +206,53 @@ def analyze_workflow(filename: str, content: str) -> dict:
     injections = re.findall(r"\$\{\{\s*github\.event\.([^\}]+)\}\}", raw)
     result["expression_injection"] = injections
 
-    # Check for comment.body injection in run: blocks
-    if "comment.body" in raw:
-        # Check if it's in an if: condition (safe) or run: block (dangerous)
-        lines = raw.split("\n")
-        for i, line in enumerate(lines):
-            if "comment.body" in line:
-                stripped = line.strip()
-                if stripped.startswith("run:"):
-                    result["details"].append("⚠️ comment.body in run: block — SCRIPT INJECTION RISK")
+    # Dangerous expressions that should NEVER appear in run: blocks
+    # (0-click injectable: attacker controls these fields via PR body/title/comments)
+    DANGEROUS_RUN_EXPRS = [
+        "comment.body", "issue.body", "issue.title",
+        "pull_request.body", "pull_request.title",
+        "review.body", "review_comment.body",
+    ]
+
+    # Check for dangerous expressions in run: blocks
+    # Handles both inline `run: echo ${{ expr }}` and multi-line `run: |` blocks
+    lines = raw.split("\n")
+    for danger_expr in DANGEROUS_RUN_EXPRS:
+        if danger_expr not in raw:
+            continue
+        in_run_block = False
+        run_block_indent = 0
+        for line in lines:
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+
+            # Detect run: block start
+            if stripped.startswith("run:"):
+                in_run_block = True
+                run_block_indent = indent
+                # Inline value on same line
+                if danger_expr in stripped:
+                    result["details"].append(f"⚠️ {danger_expr} in run: block — SCRIPT INJECTION RISK")
                     result["risk_score"] += 30
-                elif stripped.startswith("- ") and "run:" in lines[max(0, i-1)] if i > 0 else False:
-                    result["details"].append("⚠️ comment.body near run: block — check for injection")
-                    result["risk_score"] += 15
+                    in_run_block = False
+                    break
+                # Multi-line block indicator (| or >)
+                if "|" in stripped or ">" in stripped:
+                    continue
+                # Single-line value without block indicator
+                in_run_block = False
+                continue
+
+            # Inside a multi-line run block
+            if in_run_block:
+                # If indentation drops back to or below run: level, block ended
+                if indent <= run_block_indent and stripped:
+                    in_run_block = False
+                    continue
+                if danger_expr in stripped:
+                    result["details"].append(f"⚠️ {danger_expr} in run: block — SCRIPT INJECTION RISK")
+                    result["risk_score"] += 30
+                    break
 
     # ── Jobs ──
     jobs = wf.get("jobs", {})
@@ -279,8 +316,12 @@ def analyze_workflow(filename: str, content: str) -> dict:
                         job_info["checkout_pr_code"] = True
                         result["details"].append(f"Checkout PR code: ref={ref}")
 
-                    # Check if persist-credentials is false
-                    persist = with_config.get("persist-credentials", True)
+                    # Check if persist-credentials is explicitly false
+                    persist_creds = with_config.get("persist-credentials", True)
+                    if persist_creds is not False:
+                        result["details"].append(
+                            f"Checkout retains credentials (persist-credentials not false)"
+                        )
 
             result["jobs"].append(job_info)
 
@@ -317,15 +358,19 @@ def analyze_workflow(filename: str, content: str) -> dict:
         result["risk_score"] += 10 * min(len(result["secrets_used"]), 5)
         result["details"].append(f"Secrets exposed: {', '.join(sorted(result['secrets_used']))}")
 
-    if is_github_hosted and not has_self_hosted:
+    if is_github_hosted and not has_self_hosted and not is_runner_group:
         result["risk_score"] = 0
         result["verdict"] = "SAFE (GitHub-hosted)"
 
-    if is_runner_group:
-        # Runner groups could be GitHub-hosted larger runners
+    if is_runner_group and not has_self_hosted:
+        # Runner groups could be GitHub-hosted larger runners or self-hosted groups
+        # group: "Default" (capital D) typically = self-hosted in enterprise
+        # group: "ubuntu-latest" or lowercase = GitHub-hosted larger runner
+        result["verdict"] = "MANUAL_REVIEW (runner group — verify if self-hosted)"
+        result["risk_score"] = max(result["risk_score"], 5)
         result["details"].append("Note: runner group may be GitHub-hosted larger runner — verify manually")
 
-    if not has_self_hosted and not is_runner_group:
+    if not has_self_hosted and not is_runner_group and not is_github_hosted:
         result["verdict"] = "SAFE"
 
     return result
@@ -425,6 +470,7 @@ def generate_summary(results: list[dict]) -> dict:
         "critical": [],
         "high": [],
         "potential": [],
+        "manual_review": [],
         "not_exploitable": [],
         "safe": [],
         "github_hosted": [],
@@ -448,6 +494,8 @@ def generate_summary(results: list[dict]) -> dict:
             summary["high"].append(entry)
         elif "POTENTIAL" in verdict or "MEDIUM" in verdict:
             summary["potential"].append(entry)
+        elif "MANUAL_REVIEW" in verdict:
+            summary["manual_review"].append(entry)
         elif "NOT EXPLOITABLE" in verdict:
             summary["not_exploitable"].append(entry)
         elif "SAFE" in verdict or "GITHUB" in verdict.upper():
@@ -480,6 +528,7 @@ def write_summary_txt(analysis: dict, output_path: str):
         f"CRITICAL (0-click RCE): {len(summary['critical'])}",
         f"HIGH (0-click injection): {len(summary['high'])}",
         f"POTENTIAL (gate required): {len(summary['potential'])}",
+        f"MANUAL_REVIEW (runner group): {len(summary['manual_review'])}",
         f"NOT EXPLOITABLE: {len(summary['not_exploitable'])}",
         f"SAFE/GitHub-hosted: {len(summary['github_hosted']) + len(summary['safe'])}",
         "",
@@ -489,6 +538,7 @@ def write_summary_txt(analysis: dict, output_path: str):
         ("critical", "CRITICAL — 0-Click RCE"),
         ("high", "HIGH — 0-Click Script Injection"),
         ("potential", "POTENTIAL — Gate Required"),
+        ("manual_review", "MANUAL_REVIEW — Runner Group (verify if self-hosted)"),
         ("not_exploitable", "NOT EXPLOITABLE"),
     ]:
         items = summary.get(category, [])

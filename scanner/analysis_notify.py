@@ -29,6 +29,7 @@ SEVERITY_COLORS = {
     "HIGH": "#e67e22",
     "POTENTIAL": "#f0ad4e",
     "NOT_EXPLOITABLE": "#6c757d",
+    "MANUAL_REVIEW": "#6f42c1",
     "SAFE": "#28a745",
 }
 
@@ -41,6 +42,8 @@ def _severity_level(verdict: str) -> str:
         return "HIGH"
     if "POTENTIAL" in v or "MEDIUM" in v:
         return "POTENTIAL"
+    if "MANUAL_REVIEW" in v:
+        return "MANUAL_REVIEW"
     if "NOT EXPLOITABLE" in v:
         return "NOT EXPLOITABLE"
     return "SAFE"
@@ -56,6 +59,7 @@ def build_analysis_email(analysis: dict) -> str:
     n_critical = len(summary.get("critical", []))
     n_high = len(summary.get("high", []))
     n_potential = len(summary.get("potential", []))
+    n_manual_review = len(summary.get("manual_review", []))
     n_not_exploitable = len(summary.get("not_exploitable", []))
     n_safe = len(summary.get("github_hosted", [])) + len(summary.get("safe", []))
 
@@ -88,6 +92,9 @@ def build_analysis_email(analysis: dict) -> str:
         <span style="background:#6c757d;color:white;padding:4px 10px;border-radius:3px;font-size:13px">
             NOT EXPLOITABLE: {n_not_exploitable}
         </span>
+        <span style="background:#6f42c1;color:white;padding:4px 10px;border-radius:3px;font-size:13px">
+            MANUAL_REVIEW: {n_manual_review}
+        </span>
         <span style="background:#28a745;color:white;padding:4px 10px;border-radius:3px;font-size:13px">
             SAFE: {n_safe}
         </span>
@@ -103,6 +110,7 @@ def build_analysis_email(analysis: dict) -> str:
         ("critical", "CRITICAL — 0-Click RCE Possible", "#dc3545"),
         ("high", "HIGH — 0-Click Script Injection", "#e67e22"),
         ("potential", "POTENTIAL — Security Gate Required", "#f0ad4e"),
+        ("manual_review", "MANUAL_REVIEW — Runner Group (verify if self-hosted)", "#6f42c1"),
         ("not_exploitable", "NOT EXPLOITABLE — Needs Approval/No Precedent", "#6c757d"),
     ]
 
@@ -158,7 +166,7 @@ def build_analysis_email(analysis: dict) -> str:
         </table>"""
 
     # ── Workflow details for actionable items ──
-    actionable_items = summary.get("critical", []) + summary.get("high", []) + summary.get("potential", [])
+    actionable_items = summary.get("critical", []) + summary.get("high", []) + summary.get("potential", []) + summary.get("manual_review", [])
     details_html = ""
     if actionable_items:
         details_html = """
