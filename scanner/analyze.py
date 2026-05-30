@@ -147,6 +147,9 @@ def analyze_workflow(filename: str, content: str) -> dict:
         "checkout_pr_code": False,
         "expression_injection": [],
         "permissions": None,
+        "mutable_actions": [],       # Actions using mutable tags (not SHA-pinned)
+        "has_oidc": False,           # id-token: write permission present
+        "has_cache_write": False,    # actions/cache without fork PR guard
         "risk_score": 0,
         "verdict": "UNKNOWN",
         "details": [],
@@ -189,11 +192,32 @@ def analyze_workflow(filename: str, content: str) -> dict:
     has_prt = "pull_request_target" in result["trigger_types"]
     has_pr = "pull_request" in result["trigger_types"]
     has_ic = "issue_comment" in result["trigger_types"]
+    has_wfr = "workflow_run" in result["trigger_types"]
 
     # ── Permissions ──
     perms = wf.get("permissions", None)
     if perms:
         result["permissions"] = perms
+        # OIDC detection: id-token: write enables cloud credential minting
+        if isinstance(perms, dict) and perms.get("id-token") == "write":
+            result["has_oidc"] = True
+        elif perms == "write-all":
+            result["has_oidc"] = True
+
+    # Also check job-level permissions for OIDC
+    if not result["has_oidc"]:
+        jobs_dict = wf.get("jobs", {})
+        if isinstance(jobs_dict, dict):
+            for _jn, job_data in jobs_dict.items():
+                if not isinstance(job_data, dict):
+                    continue
+                job_perms = job_data.get("permissions", None)
+                if isinstance(job_perms, dict) and job_perms.get("id-token") == "write":
+                    result["has_oidc"] = True
+                    break
+                elif job_perms == "write-all":
+                    result["has_oidc"] = True
+                    break
 
     # ── Raw content analysis (more reliable than YAML for GHA expressions) ──
     raw = content
@@ -323,6 +347,32 @@ def analyze_workflow(filename: str, content: str) -> dict:
                             f"Checkout retains credentials (persist-credentials not false)"
                         )
 
+                # Mutable action tag detection (#4 Tag Poisoning)
+                # A mutable tag like @v4 can be repointed to a malicious commit
+                # SHA pins like @b4ffde65... are immutable
+                if uses and "@" in uses:
+                    ref_part = uses.split("@", 1)[1]
+                    # Short refs (<=40 chars) that are NOT full 40-char hex = mutable tag
+                    if len(ref_part) < 40 or not re.fullmatch(r"[0-9a-f]{40}", ref_part):
+                        result["mutable_actions"].append(uses)
+                        result["details"].append(f"Mutable action ref: {uses}")
+
+                # Cache usage detection (#5 Cache Poisoning)
+                # actions/cache in PRT/PR context without fork guard = cache poisoning risk
+                if "actions/cache" in uses or "actions/cache" in str(step.get("uses", "")):
+                    step_if = str(step.get("if", ""))
+                    # Check if there's a guard that prevents cache write on fork PRs
+                    has_cache_guard = (
+                        "github.event_name" in step_if
+                        or "pull_request" in step_if
+                        or "fork" in step_if.lower()
+                    )
+                    if not has_cache_guard and (has_prt or has_pr):
+                        result["has_cache_write"] = True
+                        result["details"].append(
+                            f"actions/cache without fork guard in step '{step.get('name', uses)}'"
+                        )
+
             result["jobs"].append(job_info)
 
     # ── Risk Scoring ──
@@ -346,6 +396,14 @@ def analyze_workflow(filename: str, content: str) -> dict:
             result["risk_score"] += 70
             result["verdict"] = "HIGH (0-click script injection)"
 
+    if has_wfr and has_self_hosted:
+        # workflow_run is triggered after another workflow completes on the same repo
+        # No approval needed, runs with repo secrets, can checkout any code
+        result["risk_score"] += 35
+        result["details"].append("workflow_run trigger on self-hosted runner — no approval needed")
+        if result["verdict"] == "UNKNOWN":
+            result["verdict"] = "POTENTIAL (workflow_run, no approval)"
+
     if has_pr and has_self_hosted:
         result["risk_score"] += 20
         if result["verdict"] == "UNKNOWN":
@@ -353,6 +411,38 @@ def analyze_workflow(filename: str, content: str) -> dict:
 
     if result["checkout_pr_code"]:
         result["risk_score"] += 15
+
+    # TOCTOU pattern: issue_comment approval + pull_request checkout
+    # issue_comment webhook doesn't carry SHA → second API call creates race window
+    if has_ic and (has_pr or has_prt) and result["checkout_pr_code"]:
+        result["risk_score"] += 25
+        result["details"].append(
+            "TOCTOU risk: issue_comment trigger + checkout PR code — SHA race window"
+        )
+        if result["verdict"] not in ("CRITICAL (0-click RCE possible)", "HIGH (0-click script injection)"):
+            result["verdict"] = "HIGH (TOCTOU race condition)"
+
+    # OIDC token risk: id-token:write + cloud provider credentials
+    # If OIDC is present and workflow runs on PR/PRT, attacker can steal cloud credentials
+    if result["has_oidc"] and (has_prt or has_pr or has_ic):
+        result["risk_score"] += 20
+        result["details"].append(
+            "OIDC (id-token:write) with PR trigger — cloud credential theft possible"
+        )
+
+    # Cache poisoning risk: fork PR can write cache → privileged workflow executes it
+    if result["has_cache_write"] and (has_prt or has_pr):
+        result["risk_score"] += 15
+        result["details"].append(
+            "Cache poisoning risk: actions/cache without fork guard"
+        )
+
+    # Mutable action tags: @v1/@v2 can be repointed to malicious commits
+    if result["mutable_actions"]:
+        result["risk_score"] += 5
+        result["details"].append(
+            f"Tag poisoning risk: {len(result['mutable_actions'])} mutable action ref(s)"
+        )
 
     if result["secrets_used"]:
         result["risk_score"] += 10 * min(len(result["secrets_used"]), 5)
@@ -386,7 +476,11 @@ def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str]) -> 
         "has_self_hosted": False,
         "has_prt": False,
         "has_ic": False,
+        "has_wfr": False,
         "secrets_total": set(),
+        "mutable_actions_total": [],
+        "has_oidc": False,
+        "has_cache_risk": False,
         "highest_risk": 0,
         "verdict": "UNKNOWN",
         "none_approval": None,
@@ -412,13 +506,20 @@ def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str]) -> 
             result["has_prt"] = True
         if "issue_comment" in analysis["trigger_types"]:
             result["has_ic"] = True
+        if "workflow_run" in analysis["trigger_types"]:
+            result["has_wfr"] = True
         result["secrets_total"].update(analysis["secrets_used"])
+        result["mutable_actions_total"].extend(analysis["mutable_actions"])
+        if analysis["has_oidc"]:
+            result["has_oidc"] = True
+        if analysis["has_cache_write"]:
+            result["has_cache_risk"] = True
         if analysis["risk_score"] > result["highest_risk"]:
             result["highest_risk"] = analysis["risk_score"]
             result["verdict"] = analysis["verdict"]
 
-    # For PR-only repos with self-hosted, check NONE user approval history
-    if result["has_self_hosted"] and not result["has_prt"] and not result["has_ic"]:
+    # For PR-only repos with self-hosted (no PRT/IC/WFR), check NONE user approval history
+    if result["has_self_hosted"] and not result["has_prt"] and not result["has_ic"] and not result["has_wfr"]:
         token = rotator.next()
         result["none_approval"] = check_none_approval(token, repo)
         if not result["none_approval"]["has_none_precedent"]:
@@ -485,6 +586,9 @@ def generate_summary(results: list[dict]) -> dict:
             "verdict": verdict,
             "triggers": r["trigger_types"],
             "has_self_hosted": r["has_self_hosted"],
+            "has_oidc": r.get("has_oidc", False),
+            "has_cache_risk": r.get("has_cache_risk", False),
+            "mutable_actions_count": len(r.get("mutable_actions_total", [])),
             "secrets": sorted(r["secrets_total"]) if r["secrets_total"] else [],
         }
 
@@ -508,12 +612,14 @@ def generate_summary(results: list[dict]) -> dict:
 
 def write_report(analysis: dict, output_path: str):
     """Write detailed analysis report."""
-    # Clean sets for JSON serialization
+    # Clean sets/lists for JSON serialization
     for r in analysis["results"]:
         r["secrets_total"] = sorted(r["secrets_total"]) if r["secrets_total"] else []
+        r["mutable_actions_total"] = list(set(r.get("mutable_actions_total", [])))
         for wf in r["workflows"]:
             wf["secrets_used"] = sorted(wf["secrets_used"]) if wf["secrets_used"] else []
             wf["runner_types"] = sorted(wf["runner_types"]) if wf["runner_types"] else []
+            wf["mutable_actions"] = list(set(wf.get("mutable_actions", [])))
 
     Path(output_path).write_text(json.dumps(analysis, indent=2, ensure_ascii=False) + "\n")
 
@@ -548,9 +654,18 @@ def write_summary_txt(analysis: dict, output_path: str):
         lines.append(f"{label} ({len(items)})")
         lines.append(f"{'=' * 70}")
         for item in items:
-            secrets_str = f" | secrets: {', '.join(item['secrets'])}" if item["secrets"] else ""
+            extras = []
+            if item["secrets"]:
+                extras.append(f"secrets: {', '.join(item['secrets'])}")
+            if item.get("has_oidc"):
+                extras.append("OIDC: yes")
+            if item.get("has_cache_risk"):
+                extras.append("cache-risk: yes")
+            if item.get("mutable_actions_count", 0) > 0:
+                extras.append(f"mutable-refs: {item['mutable_actions_count']}")
+            extras_str = f" | {' | '.join(extras)}" if extras else ""
             lines.append(f"  {item['repo']} ({item['vendor']})")
-            lines.append(f"    triggers: {', '.join(item['triggers'])} | risk={item['risk_score']}{secrets_str}")
+            lines.append(f"    triggers: {', '.join(item['triggers'])} | risk={item['risk_score']}{extras_str}")
             lines.append(f"    verdict: {item['verdict']}")
             lines.append("")
 
