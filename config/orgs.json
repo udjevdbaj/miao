@@ -152,6 +152,10 @@
       "query": "self-hosted+workflow_run+runs-on"
     },
     {
+      "name": "ICE",
+      "query": "self-hosted+issue.body+runs-on"
+    },
+    {
       "name": "OIDC",
       "query": "id-token+pull_request_target+runs-on"
     },
@@ -160,8 +164,16 @@
       "query": "actions/cache+pull_request_target+runs-on"
     },
     {
-      "name": "ICE",
-      "query": "self-hosted+issue.body+runs-on"
+      "name": "PRTGH",
+      "query": "pull_request_target+secrets+runs-on"
+    },
+    {
+      "name": "ICGH",
+      "query": "comment.body+secrets+runs-on"
+    },
+    {
+      "name": "CACHGH",
+      "query": "actions/cache+pull_request_target+secrets"
     },
     {
       "name": "DYNF",
