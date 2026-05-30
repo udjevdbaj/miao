@@ -58,7 +58,10 @@
     {"name": "WFR",  "query": "self-hosted+workflow_run+runs-on"},
     {"name": "OIDC", "query": "id-token+pull_request_target+runs-on"},
     {"name": "CACHE","query": "actions/cache+pull_request_target+runs-on"},
-    {"name": "ICE",  "query": "self-hosted+issue.body+runs-on"}
+    {"name": "ICE",  "query": "self-hosted+issue.body+runs-on"},
+    {"name": "DYNF", "query": "dynaconf+secrets+language:Python"},
+    {"name": "DYNJ", "query": "@format+secrets+language:Python"},
+    {"name": "DYNL", "query": "dynaconf_include+language:Python"}
   ],
   "settings": {
     "sleep_between_requests": 8,
