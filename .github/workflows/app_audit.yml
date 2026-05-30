@@ -75,21 +75,17 @@ jobs:
             fi
           fi
 
-          # 3. 收集来源 B：精选仓库列表
-          CONFIG_REPOS=$(python3 -c "
-          import json
-          cfg = json.load(open('config/app_audit_repos.json'))
-          print(','.join(cfg.get('repos', [])))
-          " 2>/dev/null)
+          # 3. 收集来源 B：secret 中维护的精选仓库（不进代码仓库）
+          SECRET_REPOS="${{ secrets.APP_AUDIT_EXTRA_REPOS }}"
 
           # 4. 合并两个来源，去重
           REPOS=$(python3 -c "
           a = '$ARTIFACT_REPOS'.split(',') if '$ARTIFACT_REPOS' else []
-          b = '$CONFIG_REPOS'.split(',') if '$CONFIG_REPOS' else []
+          b = '$SECRET_REPOS'.split(',') if '$SECRET_REPOS' else []
           merged = list(dict.fromkeys(r.strip() for r in a + b if r.strip()))
           print(','.join(merged))
           ")
-          echo "Merged total: $(echo $REPOS | tr ',' '\n' | wc -l) repos (artifact: $(echo $ARTIFACT_REPOS | tr ',' '\n' | wc -l), config: $(echo $CONFIG_REPOS | tr ',' '\n' | wc -l))"
+          echo "Merged total: $(echo $REPOS | tr ',' '\n' | wc -l) repos (artifact: $(echo $ARTIFACT_REPOS | tr ',' '\n' | wc -l), extra: $(echo $SECRET_REPOS | tr ',' '\n' | wc -l))"
           echo "method=merged" >> $GITHUB_OUTPUT
 
           echo "list=$REPOS" >> $GITHUB_OUTPUT
