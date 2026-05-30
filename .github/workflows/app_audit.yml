@@ -30,13 +30,13 @@ jobs:
         run: pip install -r requirements.txt
 
       # ── 获取仓库列表 ──
-      # 优先级：手动指定 repos > 最新 analysis_report.json 中的 CRITICAL/HIGH > 硬编码列表
+      # 合并两个来源：analysis_report 高危仓库 + config 精选仓库，去重后审计
       - name: Resolve repo list
         id: repos
         run: |
           REPOS=""
 
-          # 1. 手动指定优先
+          # 1. 手动指定优先（跳过自动合并）
           if [ -n "${{ inputs.repos }}" ]; then
             echo "Using manually specified repos"
             REPOS="${{ inputs.repos }}"
@@ -45,48 +45,52 @@ jobs:
             exit 0
           fi
 
-          # 2. 从最近的 scan artifact 中提取高危仓库
+          # 2. 收集来源 A：从最近的 scan artifact 中提取高危仓库
+          ARTIFACT_REPOS=""
           echo "Fetching latest scan artifact..."
-          ARTIFACTS=$(gh api repos/${{ github.repository }}/actions/artifacts \
+          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/artifacts \
             -q '.artifacts | sort_by(.created_at) | reverse | .[] | select(.name | startswith("scan-results-")) | .id' \
             --paginate 2>/dev/null | head -1)
 
-          if [ -n "$ARTIFACTS" ]; then
-            echo "Found artifact: $ARTIFACTS"
-            gh api repos/${{ github.repository }}/actions/artifacts/$ARTIFACTS/zip > /tmp/scan_artifact.zip
+          if [ -n "$ARTIFACT_ID" ]; then
+            echo "Found artifact: $ARTIFACT_ID"
+            gh api repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip > /tmp/scan_artifact.zip
             unzip -o /tmp/scan_artifact.zip -d /tmp/scan_artifact/ 2>/dev/null
 
             if [ -f /tmp/scan_artifact/analysis_report.json ]; then
-              # 提取 CRITICAL/HIGH/MANUAL_REVIEW 的仓库
-              REPOS=$(python3 -c "
-          import json, sys
+              ARTIFACT_REPOS=$(python3 -c "
+          import json
           report = json.load(open('/tmp/scan_artifact/analysis_report.json'))
           summary = report.get('summary', {})
           repos = []
           for cat in ('critical', 'high', 'manual_review'):
               for item in summary.get(cat, []):
                   repos.append(item['repo'])
-          # 也包含有 OIDC/cache/config-abuse 的潜在目标
           for item in summary.get('potential', []):
               if item.get('has_oidc') or item.get('has_cache_risk') or item.get('config_abuse_count', 0) > 0:
                   repos.append(item['repo'])
-          print(','.join(dict.fromkeys(repos)))  # dedupe preserving order
+          print(','.join(dict.fromkeys(repos)))
           " 2>/dev/null)
-              echo "Extracted from analysis report: $(echo $REPOS | tr ',' '\n' | wc -l) repos"
-              echo "method=analysis_report" >> $GITHUB_OUTPUT
+              echo "From analysis report: $(echo $ARTIFACT_REPOS | tr ',' '\n' | wc -l) repos"
             fi
           fi
 
-          # 3. 兜底：使用硬编码列表
-          if [ -z "$REPOS" ]; then
-            echo "No artifact found, falling back to config file"
-            REPOS=$(python3 -c "
+          # 3. 收集来源 B：精选仓库列表
+          CONFIG_REPOS=$(python3 -c "
           import json
           cfg = json.load(open('config/app_audit_repos.json'))
           print(','.join(cfg.get('repos', [])))
+          " 2>/dev/null)
+
+          # 4. 合并两个来源，去重
+          REPOS=$(python3 -c "
+          a = '$ARTIFACT_REPOS'.split(',') if '$ARTIFACT_REPOS' else []
+          b = '$CONFIG_REPOS'.split(',') if '$CONFIG_REPOS' else []
+          merged = list(dict.fromkeys(r.strip() for r in a + b if r.strip()))
+          print(','.join(merged))
           ")
-            echo "method=fallback_config" >> $GITHUB_OUTPUT
-          fi
+          echo "Merged total: $(echo $REPOS | tr ',' '\n' | wc -l) repos (artifact: $(echo $ARTIFACT_REPOS | tr ',' '\n' | wc -l), config: $(echo $CONFIG_REPOS | tr ',' '\n' | wc -l))"
+          echo "method=merged" >> $GITHUB_OUTPUT
 
           echo "list=$REPOS" >> $GITHUB_OUTPUT
           echo "Repos to audit: $(echo $REPOS | tr ',' '\n' | wc -l)"
