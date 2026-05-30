@@ -145,8 +145,12 @@ def audit_repo_apps(token: str, repo: str) -> dict:
     data = api_get(token, f"{API}/repos/{repo}/installation")
     if data is None:
         # Fallback: check for bot accounts in recent commits/PRs
-        result["error"] = "Token lacks admin scope for app enumeration; using fallback"
+        # Note: /repos/{repo}/installation requires target repo admin,
+        # not just admin:repo_hook scope. Fallback is the normal path
+        # for third-party repos.
+        result["error"] = "Token not admin on target repo; using bot-detection fallback"
         result["apps"] = _fallback_detect_bots(token, repo)
+        _update_highest_severity(result)
         return result
 
     # If we have installation data, assess it
@@ -155,11 +159,17 @@ def audit_repo_apps(token: str, repo: str) -> dict:
         permissions = data.get("permissions", {})
         assessment = assess_app_permissions(app_name, permissions)
         result["apps"].append(assessment)
-        if assessment["risk_score"] > result["highest_score"]:
-            result["highest_score"] = assessment["risk_score"]
-            result["highest_severity"] = assessment["severity"]
+        _update_highest_severity(result)
 
     return result
+
+
+def _update_highest_severity(result: dict):
+    """Recalculate highest_severity and highest_score from apps list."""
+    for app in result["apps"]:
+        if app["risk_score"] > result["highest_score"]:
+            result["highest_score"] = app["risk_score"]
+            result["highest_severity"] = app["severity"]
 
 
 def _fallback_detect_bots(token: str, repo: str) -> list[dict]:
