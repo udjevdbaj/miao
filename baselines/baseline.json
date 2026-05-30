@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-05-30T10:55:18.130582+00:00",
-  "_scan_count": 9,
+  "_last_scan": "2026-05-30T20:36:38.319702+00:00",
+  "_scan_count": 10,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -90,5 +90,9 @@
   "kubewharf/katalyst-core": true,
   "TencentYoutuResearch/SPEAR": true,
   "tencentyun/qcloud-sdk-ios": true,
-  "tkestack/tke": true
+  "tkestack/tke": true,
+  "Tencent/TAD_Sim": true,
+  "alibaba/tair-kvcache": true,
+  "oceanbase/powermem": true,
+  "antvis/x6-extensions": true
 }
