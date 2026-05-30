@@ -10,10 +10,6 @@ on:
         description: '重建 baseline（忽略现有基线，全部标记为已知）'
         type: boolean
         default: false
-      skip_app_audit:
-        description: '跳过 GitHub App 审计（节省 API 调用）'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -68,30 +64,6 @@ jobs:
         if: always()
         run: cat analysis_summary.txt
 
-      # ── Phase 3: GitHub App Audit ──
-      - name: Run GitHub App audit
-        if: ${{ always() && inputs.skip_app_audit != true }}
-        env:
-          SCAN_TOKENS: ${{ secrets.SCAN_TOKENS }}
-        run: |
-          if [ -f scan_results.json ]; then
-            python scanner/app_audit.py \
-              --input scan_results.json \
-              --output app_audit_report.json \
-              --summary app_audit_summary.txt
-          else
-            echo "No scan_results.json — skipping app audit"
-          fi
-
-      - name: Show app audit summary
-        if: always()
-        run: |
-          if [ -f app_audit_summary.txt ]; then
-            cat app_audit_summary.txt
-          else
-            echo "App audit skipped or no results"
-          fi
-
       # ── Commit baseline update ──
       - name: Commit baseline update
         run: |
@@ -127,20 +99,6 @@ jobs:
             --summary analysis_summary.txt \
             --always
 
-      - name: Send app audit notification
-        if: always()
-        env:
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
-        run: |
-          if [ -f app_audit_report.json ]; then
-            python scanner/app_audit_notify.py \
-              --input app_audit_report.json \
-              --summary app_audit_summary.txt \
-              --always
-          fi
-
       # ── Upload Artifacts ──
       - name: Upload scan artifacts
         if: always()
@@ -153,5 +111,3 @@ jobs:
             scan_summary.txt
             analysis_report.json
             analysis_summary.txt
-            app_audit_report.json
-            app_audit_summary.txt
