@@ -150,6 +150,7 @@ def analyze_workflow(filename: str, content: str) -> dict:
         "mutable_actions": [],       # Actions using mutable tags (not SHA-pinned)
         "has_oidc": False,           # id-token: write permission present
         "has_cache_write": False,    # actions/cache without fork PR guard
+        "config_abuse_risks": [],    # Dynaconf dynamic variable abuse patterns
         "risk_score": 0,
         "verdict": "UNKNOWN",
         "details": [],
@@ -375,6 +376,32 @@ def analyze_workflow(filename: str, content: str) -> dict:
 
             result["jobs"].append(job_info)
 
+    # ── Config Library Abuse Detection (#11) ──
+    # Dynaconf dynamic variables (@format, @jinja, dynaconf_include)
+    # These can leak env vars/secrets or achieve RCE via template injection
+    DYNACONF_PATTERNS = [
+        # @format {env} in values → env var leak (Qodo: all env vars into one key)
+        (r"@format\s*\{[^}]*env[^}]*\}", "HIGH", "@format with env → environment variable leak"),
+        # @jinja → Jinja2 template engine → attribute access / RCE
+        (r"@jinja\s*\{", "HIGH", "@jinja → Jinja2 template injection (attribute access/RCE)"),
+        # @json → arbitrary object construction
+        (r"@json\s*\{", "MEDIUM", "@json → dynamic object construction"),
+        # dynaconf_include → file inclusion (LFI-like)
+        (r"dynaconf_include", "HIGH", "dynaconf_include → file inclusion (arbitrary .py execution)"),
+        # AUTO_CAST_FOR_DYNACONF=true → enables all dynamic features
+        (r"AUTO_CAST_FOR_DYNACONF", "MEDIUM", "AUTO_CAST_FOR_DYNACONF → dynamic variable engine active"),
+    ]
+    for pattern, severity, description in DYNACONF_PATTERNS:
+        matches = re.findall(pattern, raw, re.IGNORECASE)
+        if matches:
+            result["config_abuse_risks"].append({
+                "pattern": pattern,
+                "severity": severity,
+                "description": description,
+                "count": len(matches),
+            })
+            result["details"].append(f"Config abuse ({severity}): {description} (×{len(matches)})")
+
     # ── Risk Scoring ──
     has_self_hosted = "self-hosted" in result["runner_types"]
     is_github_hosted = any("github-hosted" in r for r in result["runner_types"])
@@ -443,6 +470,21 @@ def analyze_workflow(filename: str, content: str) -> dict:
         result["details"].append(
             f"Tag poisoning risk: {len(result['mutable_actions'])} mutable action ref(s)"
         )
+
+    # Config library abuse scoring (#11)
+    for abuse in result["config_abuse_risks"]:
+        if abuse["severity"] == "HIGH":
+            result["risk_score"] += 25
+        elif abuse["severity"] == "MEDIUM":
+            result["risk_score"] += 10
+    # If config abuse + secrets + PR trigger → extremely dangerous
+    if result["config_abuse_risks"] and result["secrets_used"] and (has_prt or has_pr or has_ic):
+        result["risk_score"] += 30
+        result["details"].append(
+            "CRITICAL combo: config library dynamic vars + secrets + PR trigger → credential leak"
+        )
+        if "CRITICAL" not in result["verdict"] and "HIGH" not in result["verdict"]:
+            result["verdict"] = "HIGH (config library abuse → credential leak)"
 
     if result["secrets_used"]:
         result["risk_score"] += 10 * min(len(result["secrets_used"]), 5)
@@ -589,6 +631,7 @@ def generate_summary(results: list[dict]) -> dict:
             "has_oidc": r.get("has_oidc", False),
             "has_cache_risk": r.get("has_cache_risk", False),
             "mutable_actions_count": len(r.get("mutable_actions_total", [])),
+            "config_abuse_count": sum(len(wf.get("config_abuse_risks", [])) for wf in r.get("workflows", [])),
             "secrets": sorted(r["secrets_total"]) if r["secrets_total"] else [],
         }
 
@@ -663,6 +706,8 @@ def write_summary_txt(analysis: dict, output_path: str):
                 extras.append("cache-risk: yes")
             if item.get("mutable_actions_count", 0) > 0:
                 extras.append(f"mutable-refs: {item['mutable_actions_count']}")
+            if item.get("config_abuse_count", 0) > 0:
+                extras.append(f"config-abuse: {item['config_abuse_count']}")
             extras_str = f" | {' | '.join(extras)}" if extras else ""
             lines.append(f"  {item['repo']} ({item['vendor']})")
             lines.append(f"    triggers: {', '.join(item['triggers'])} | risk={item['risk_score']}{extras_str}")
