@@ -549,12 +549,13 @@ def check_none_approval(token: str, repo: str) -> dict:
     return result
 
 
-def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str]) -> dict:
+def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str], query_labels: list[str] | None = None) -> dict:
     """Full analysis of a single repo."""
     token = rotator.next()
     result = {
         "repo": repo,
         "trigger_types": trigger_types,
+        "query_labels": query_labels or [],
         "workflows": [],
         "secrets_total": set(),
         "mutable_actions_total": [],
@@ -638,19 +639,37 @@ def run_analysis(scan_results: dict, rotator: TokenRotator) -> dict:
     """Analyze all repos from scan results."""
     all_repos = scan_results.get("all_repos", [])
 
+    # Map query labels to canonical trigger types
+    # PRT/PRTGH → pull_request_target, IC/ICGH → issue_comment, etc.
+    QUERY_TRIGGER_MAP = {
+        "PRT": "pull_request_target", "PRTGH": "pull_request_target",
+        "PR": "pull_request", "PRGH": "pull_request",
+        "IC": "issue_comment", "ICGH": "issue_comment",
+        "ICE": "issue_comment",
+        "WFR": "workflow_run",
+        "OIDC": "pull_request_target",
+        "CACHE": "pull_request_target", "CACHGH": "pull_request_target",
+        "AIREV": "pull_request_target",
+        "PUBPRT": "pull_request_target",
+        "DYNF": "pull_request_target", "DYNJ": "pull_request_target", "DYNL": "pull_request_target",
+    }
+
     # Deduplicate repos
     repo_map = {}
     for r in all_repos:
         repo = r["repo"]
         if repo not in repo_map:
-            repo_map[repo] = {"trigger_types": set(), "vendor": r.get("vendor", "")}
-        repo_map[repo]["trigger_types"].add(r.get("query_type", ""))
+            repo_map[repo] = {"trigger_types": set(), "vendor": r.get("vendor", ""), "query_labels": set()}
+        qt = r.get("query_type", "")
+        canonical = QUERY_TRIGGER_MAP.get(qt, qt)
+        repo_map[repo]["trigger_types"].add(canonical)
+        repo_map[repo]["query_labels"].add(qt)
 
     print(f"Analyzing {len(repo_map)} repos...\n")
 
     results = []
     for repo, info in sorted(repo_map.items()):
-        result = analyze_repo(rotator, repo, sorted(info["trigger_types"]))
+        result = analyze_repo(rotator, repo, sorted(info["trigger_types"]), sorted(info["query_labels"]))
         result["vendor"] = info["vendor"]
         results.append(result)
         time.sleep(1)
