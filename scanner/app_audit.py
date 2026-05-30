@@ -374,9 +374,28 @@ def main():
                 repos.append(repo)
     elif args.config:
         config = json.loads(Path(args.config).read_text())
-        # For orgs.json, we need to discover repos first — skip for now
-        print("NOTE: --config mode requires repo discovery. Use --input with scan_results.json instead.")
-        sys.exit(1)
+        # Supports two formats:
+        # 1. {"repos": ["owner/repo", ...]}  — explicit repo list
+        # 2. {"vendors": [...]} with "orgs"   — orgs.json format (enumerate repos via API)
+        if "repos" in config:
+            repos = [r.strip() for r in config["repos"] if r.strip()]
+            print(f"Loaded {len(repos)} repos from config")
+        elif "vendors" in config:
+            print("Discovering repos from org list...")
+            for vendor in config["vendors"]:
+                for org in vendor.get("orgs", []):
+                    token = rotator.next()
+                    data = api_get(token, f"{API}/orgs/{org}/repos?per_page=100&type=public")
+                    if data and isinstance(data, list):
+                        for r in data:
+                            full_name = r.get("full_name", "")
+                            if full_name:
+                                repos.append(full_name)
+                        print(f"  {org}: {len(data)} repos")
+                    else:
+                        print(f"  {org}: no repos or error")
+                    time.sleep(0.5)
+            print(f"Total repos discovered: {len(repos)}")
     else:
         print("ERROR: Provide --repos, --input, or --config")
         sys.exit(1)
