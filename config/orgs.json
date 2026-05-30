@@ -3,65 +3,186 @@
     {
       "name": "ByteDance",
       "orgs": [
-        "bytedance", "ByteDance-Seed", "volcengine", "larksuite", "tiktok", "StarRocks",
-        "cloudwego", "kubewharf", "web-infra-dev", "btraceio", "VisActor",
-        "verl-project", "aibrix", "rstackjs", "arco-design"
+        "bytedance",
+        "ByteDance-Seed",
+        "volcengine",
+        "larksuite",
+        "tiktok",
+        "StarRocks",
+        "cloudwego",
+        "kubewharf",
+        "web-infra-dev",
+        "btraceio",
+        "VisActor",
+        "verl-project",
+        "aibrix",
+        "rstackjs",
+        "arco-design"
       ]
     },
     {
       "name": "Baidu",
-      "orgs": ["baidu", "PaddlePaddle", "ApolloAuto", "baidubce", "baidu-research", "xuperchain", "swan-team"]
+      "orgs": [
+        "baidu",
+        "PaddlePaddle",
+        "ApolloAuto",
+        "baidubce",
+        "baidu-research",
+        "xuperchain",
+        "swan-team"
+      ]
     },
     {
       "name": "Tencent",
       "orgs": [
-        "tencent", "TencentCloud", "tencentmusic", "TarsCloud",
-        "TencentBlueKing", "TencentARC", "TencentOpen",
-        "TencentYoutuResearch", "tencentyun", "tkestack",
-        "tke-apps", "tke-networking", "kubernetes-manifests",
-        "tencentess", "Tencent-CloudEDU", "ServerlessCN",
-        "coding", "cloudnativeto", "Vbytes",
-        "bkdevops-projects", "ci-plugins",
-        "WeBankPartners", "WeBankBlockchain", "WeBankFinTech", "FederatedAI",
+        "tencent",
+        "TencentCloud",
+        "tencentmusic",
+        "TarsCloud",
+        "TencentBlueKing",
+        "TencentARC",
+        "TencentOpen",
+        "TencentYoutuResearch",
+        "tencentyun",
+        "tkestack",
+        "tke-apps",
+        "tke-networking",
+        "kubernetes-manifests",
+        "tencentess",
+        "Tencent-CloudEDU",
+        "ServerlessCN",
+        "coding",
+        "cloudnativeto",
+        "Vbytes",
+        "bkdevops-projects",
+        "ci-plugins",
+        "WeBankPartners",
+        "WeBankBlockchain",
+        "WeBankFinTech",
+        "FederatedAI",
         "node-webot"
       ]
     },
     {
       "name": "Alibaba",
       "orgs": [
-        "alibaba", "aliyun", "modelscope", "OceanBase", "AlibabaPAI",
-        "polardb", "apecloud", "kvcache-ai", "occlum", "inclavare-containers",
-        "Tongsuo-Project", "BabaSSL", "dragonflyoss", "layotto", "opensergo",
-        "sentinel-group", "sealerio", "AliyunContainerService", "openkruise",
-        "pouchcontainer", "eggjs", "macacajs", "ice-lab", "midwayjs",
-        "taobao", "dingtalk", "alipay", "dragonwell-project", "ApsaraDB",
-        "sofastack", "AlibabaCloudDocs", "Alibaba-NLP", "ant-design", "antvis",
-        "seata", "nacos-group",
-        "oam-dev", "chaosblade-io", "openkraken", "openyurtio",
-        "fluid-cloudnative", "kubedl-io"
+        "alibaba",
+        "aliyun",
+        "modelscope",
+        "OceanBase",
+        "AlibabaPAI",
+        "polardb",
+        "apecloud",
+        "kvcache-ai",
+        "occlum",
+        "inclavare-containers",
+        "Tongsuo-Project",
+        "BabaSSL",
+        "dragonflyoss",
+        "layotto",
+        "opensergo",
+        "sentinel-group",
+        "sealerio",
+        "AliyunContainerService",
+        "openkruise",
+        "pouchcontainer",
+        "eggjs",
+        "macacajs",
+        "ice-lab",
+        "midwayjs",
+        "taobao",
+        "dingtalk",
+        "alipay",
+        "dragonwell-project",
+        "ApsaraDB",
+        "sofastack",
+        "AlibabaCloudDocs",
+        "Alibaba-NLP",
+        "ant-design",
+        "antvis",
+        "seata",
+        "nacos-group",
+        "oam-dev",
+        "chaosblade-io",
+        "openkraken",
+        "openyurtio",
+        "fluid-cloudnative",
+        "kubedl-io"
       ]
     },
     {
       "name": "Huawei",
       "orgs": [
-        "huawei-cloud", "huaweicloud", "openharmony", "openeuler", "mindspore",
-        "volcano-sh", "karmada-io", "kubeedge", "modelbox-ai", "openGemini",
-        "opentiny", "kappital", "kmesh-net", "kuasar-io", "kurator-dev",
-        "DevCloudFE", "huawei-noah", "sodafoundation"
+        "huawei-cloud",
+        "huaweicloud",
+        "openharmony",
+        "openeuler",
+        "mindspore",
+        "volcano-sh",
+        "karmada-io",
+        "kubeedge",
+        "modelbox-ai",
+        "openGemini",
+        "opentiny",
+        "kappital",
+        "kmesh-net",
+        "kuasar-io",
+        "kurator-dev",
+        "DevCloudFE",
+        "huawei-noah",
+        "sodafoundation"
       ]
     }
   ],
   "queries": [
-    {"name": "PRT",  "query": "self-hosted+pull_request_target+runs-on"},
-    {"name": "PR",   "query": "self-hosted+pull_request+runs-on"},
-    {"name": "IC",   "query": "self-hosted+comment.body+runs-on"},
-    {"name": "WFR",  "query": "self-hosted+workflow_run+runs-on"},
-    {"name": "OIDC", "query": "id-token+pull_request_target+runs-on"},
-    {"name": "CACHE","query": "actions/cache+pull_request_target+runs-on"},
-    {"name": "ICE",  "query": "self-hosted+issue.body+runs-on"},
-    {"name": "DYNF", "query": "dynaconf+secrets+language:Python"},
-    {"name": "DYNJ", "query": "@format+secrets+language:Python"},
-    {"name": "DYNL", "query": "dynaconf_include+language:Python"}
+    {
+      "name": "PRT",
+      "query": "self-hosted+pull_request_target+runs-on"
+    },
+    {
+      "name": "PR",
+      "query": "self-hosted+pull_request+runs-on"
+    },
+    {
+      "name": "IC",
+      "query": "self-hosted+comment.body+runs-on"
+    },
+    {
+      "name": "WFR",
+      "query": "self-hosted+workflow_run+runs-on"
+    },
+    {
+      "name": "OIDC",
+      "query": "id-token+pull_request_target+runs-on"
+    },
+    {
+      "name": "CACHE",
+      "query": "actions/cache+pull_request_target+runs-on"
+    },
+    {
+      "name": "ICE",
+      "query": "self-hosted+issue.body+runs-on"
+    },
+    {
+      "name": "DYNF",
+      "query": "dynaconf+secrets+language:Python"
+    },
+    {
+      "name": "DYNJ",
+      "query": "@format+secrets+language:Python"
+    },
+    {
+      "name": "DYNL",
+      "query": "dynaconf_include+language:Python"
+    },
+    {
+      "name": "AIREV",
+      "query": "coderabbitai+pull_request_target"
+    },
+    {
+      "name": "PUBPRT",
+      "query": "npm+publish+pull_request_target"
+    }
   ],
   "settings": {
     "sleep_between_requests": 8,
