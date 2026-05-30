@@ -130,6 +130,7 @@ def build_analysis_email(analysis: dict) -> str:
             has_oidc = item.get("has_oidc", False)
             has_cache_risk = item.get("has_cache_risk", False)
             mutable_count = item.get("mutable_actions_count", 0)
+            config_abuse_count = item.get("config_abuse_count", 0)
 
             # Build badge row for extra risk factors
             extra_badges = ""
@@ -145,6 +146,8 @@ def build_analysis_email(analysis: dict) -> str:
                 extra_badges += '<span style="background:#fd7e14;color:white;padding:1px 5px;border-radius:2px;font-size:11px">CACHE-RISK</span> '
             if mutable_count > 0:
                 extra_badges += f'<span style="background:#6c757d;color:white;padding:1px 5px;border-radius:2px;font-size:11px">MUTABLE-REFS:{mutable_count}</span> '
+            if config_abuse_count > 0:
+                extra_badges += f'<span style="background:#dc3545;color:white;padding:1px 5px;border-radius:2px;font-size:11px">CONFIG-ABUSE:{config_abuse_count}</span> '
 
             rows_html += f"""
             <tr>
