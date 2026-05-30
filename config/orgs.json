@@ -52,9 +52,13 @@
     }
   ],
   "queries": [
-    {"name": "PRT", "query": "self-hosted+pull_request_target+runs-on"},
-    {"name": "PR",  "query": "self-hosted+pull_request+runs-on"},
-    {"name": "IC",  "query": "self-hosted+comment.body+runs-on"}
+    {"name": "PRT",  "query": "self-hosted+pull_request_target+runs-on"},
+    {"name": "PR",   "query": "self-hosted+pull_request+runs-on"},
+    {"name": "IC",   "query": "self-hosted+comment.body+runs-on"},
+    {"name": "WFR",  "query": "self-hosted+workflow_run+runs-on"},
+    {"name": "OIDC", "query": "id-token+pull_request_target+runs-on"},
+    {"name": "CACHE","query": "actions/cache+pull_request_target+runs-on"},
+    {"name": "ICE",  "query": "self-hosted+issue.body+runs-on"}
   ],
   "settings": {
     "sleep_between_requests": 8,
