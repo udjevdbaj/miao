@@ -1,0 +1,82 @@
+name: GitHub App Security Audit
+
+on:
+  schedule:
+    # 北京时间每周三 10:00 (UTC 周三 02:00)
+    - cron: '0 2 * * 3'
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: '指定仓库列表（逗号分隔 owner/repo），留空使用配置文件'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  app-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run GitHub App audit (from config)
+        if: ${{ inputs.repos == '' }}
+        env:
+          SCAN_TOKENS: ${{ secrets.SCAN_TOKENS }}
+        run: |
+          python scanner/app_audit.py \
+            --config config/app_audit_repos.json \
+            --output app_audit_report.json \
+            --summary app_audit_summary.txt
+
+      - name: Run GitHub App audit (custom repos)
+        if: ${{ inputs.repos != '' }}
+        env:
+          SCAN_TOKENS: ${{ secrets.SCAN_TOKENS }}
+        run: |
+          python scanner/app_audit.py \
+            --repos "${{ inputs.repos }}" \
+            --output app_audit_report.json \
+            --summary app_audit_summary.txt
+
+      - name: Show audit summary
+        if: always()
+        run: |
+          if [ -f app_audit_summary.txt ]; then
+            cat app_audit_summary.txt
+          else
+            echo "No audit results"
+          fi
+
+      - name: Send app audit notification
+        if: always()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          if [ -f app_audit_report.json ]; then
+            python scanner/app_audit_notify.py \
+              --input app_audit_report.json \
+              --summary app_audit_summary.txt \
+              --always
+          fi
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-audit-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            app_audit_report.json
+            app_audit_summary.txt
