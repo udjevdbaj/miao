@@ -10,9 +10,14 @@ on:
         description: '重建 baseline（忽略现有基线，全部标记为已知）'
         type: boolean
         default: false
+      extra_repos:
+        description: '额外 App 审计仓库（逗号分隔 owner/repo），追加到自动提取的高危列表'
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   scan:
@@ -64,6 +69,62 @@ jobs:
         if: always()
         run: cat analysis_summary.txt
 
+      # ── Phase 3: GitHub App Audit ──
+      - name: Resolve app audit repo list
+        id: app_repos
+        if: always()
+        run: |
+          if [ ! -f analysis_report.json ]; then
+            echo "No analysis report — skipping app audit"
+            echo "list=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          REPOS=$(python3 -c "
+          import json
+          report = json.load(open('analysis_report.json'))
+          summary = report.get('summary', {})
+          repos = []
+          # 必审：CRITICAL / HIGH / MANUAL_REVIEW
+          for cat in ('critical', 'high', 'manual_review'):
+              for item in summary.get(cat, []):
+                  repos.append(item['repo'])
+          # 条件审：POTENTIAL 但有高附加风险
+          for item in summary.get('potential', []):
+              if item.get('has_oidc') or item.get('has_cache_risk') or item.get('config_abuse_count', 0) > 0:
+                  repos.append(item['repo'])
+          # 去重保序
+          unique = list(dict.fromkeys(repos))
+          print(','.join(unique))
+          ")
+
+          # 追加手动指定的额外仓库
+          if [ -n "${{ inputs.extra_repos }}" ]; then
+            REPOS="${REPOS},${{ inputs.extra_repos }}"
+          fi
+
+          echo "list=$REPOS" >> $GITHUB_OUTPUT
+          echo "App audit targets: $(echo $REPOS | tr ',' '\n' | grep -c .) repos"
+
+      - name: Run GitHub App audit
+        if: steps.app_repos.outputs.list != ''
+        env:
+          SCAN_TOKENS: ${{ secrets.SCAN_TOKENS }}
+        run: |
+          python scanner/app_audit.py \
+            --repos "${{ steps.app_repos.outputs.list }}" \
+            --output app_audit_report.json \
+            --summary app_audit_summary.txt
+
+      - name: Show app audit summary
+        if: always()
+        run: |
+          if [ -f app_audit_summary.txt ]; then
+            cat app_audit_summary.txt
+          else
+            echo "No app audit results"
+          fi
+
       # ── Commit baseline update ──
       - name: Commit baseline update
         run: |
@@ -99,6 +160,20 @@ jobs:
             --summary analysis_summary.txt \
             --always
 
+      - name: Send app audit notification
+        if: always()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          if [ -f app_audit_report.json ]; then
+            python scanner/app_audit_notify.py \
+              --input app_audit_report.json \
+              --summary app_audit_summary.txt \
+              --always
+          fi
+
       # ── Upload Artifacts ──
       - name: Upload scan artifacts
         if: always()
@@ -111,3 +186,5 @@ jobs:
             scan_summary.txt
             analysis_report.json
             analysis_summary.txt
+            app_audit_report.json
+            app_audit_summary.txt
