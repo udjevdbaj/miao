@@ -127,14 +127,24 @@ def build_analysis_email(analysis: dict) -> str:
             secrets = item.get("secrets", [])
             risk = item.get("risk_score", 0)
             verdict = item.get("verdict", "")
+            has_oidc = item.get("has_oidc", False)
+            has_cache_risk = item.get("has_cache_risk", False)
+            mutable_count = item.get("mutable_actions_count", 0)
 
-            secrets_str = ""
+            # Build badge row for extra risk factors
+            extra_badges = ""
             if secrets:
                 secret_badges = " ".join(
                     f'<span style="background:#fff3cd;color:#856404;padding:1px 5px;border-radius:2px;font-size:11px">{s}</span>'
                     for s in secrets
                 )
-                secrets_str = f'<div style="margin-top:3px">Secrets: {secret_badges}</div>'
+                extra_badges += f'<div style="margin-top:3px">Secrets: {secret_badges}</div>'
+            if has_oidc:
+                extra_badges += '<span style="background:#e83e8c;color:white;padding:1px 5px;border-radius:2px;font-size:11px">OIDC</span> '
+            if has_cache_risk:
+                extra_badges += '<span style="background:#fd7e14;color:white;padding:1px 5px;border-radius:2px;font-size:11px">CACHE-RISK</span> '
+            if mutable_count > 0:
+                extra_badges += f'<span style="background:#6c757d;color:white;padding:1px 5px;border-radius:2px;font-size:11px">MUTABLE-REFS:{mutable_count}</span> '
 
             rows_html += f"""
             <tr>
@@ -150,7 +160,7 @@ def build_analysis_email(analysis: dict) -> str:
                         {verdict}
                     </span>
                     <span style="font-size:11px;color:#666;margin-left:5px">risk={risk}</span>
-                    {secrets_str}
+                    <div style="margin-top:3px">{extra_badges}</div>
                 </td>
             </tr>"""
 
