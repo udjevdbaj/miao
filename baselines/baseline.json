@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-05-31T11:20:38.717766+00:00",
-  "_scan_count": 11,
+  "_last_scan": "2026-05-31T20:41:56.259837+00:00",
+  "_scan_count": 12,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -221,5 +221,6 @@
   "kmesh-net/orion": true,
   "DevCloudFE/ng-devui": true,
   "DevCloudFE/react-devui": true,
-  "DevCloudFE/matechat-react": true
+  "DevCloudFE/matechat-react": true,
+  "web-infra-dev/rspack": true
 }
