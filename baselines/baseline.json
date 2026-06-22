@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-06-21T22:02:15.072831+00:00",
-  "_scan_count": 42,
+  "_last_scan": "2026-06-22T18:54:34.532649+00:00",
+  "_scan_count": 43,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -226,5 +226,6 @@
   "alibaba/open-code-review": true,
   "bytedance/perfsee": true,
   "alibaba/loongsuite-java": true,
-  "aliyun/maxcompute-semantic": true
+  "aliyun/maxcompute-semantic": true,
+  "aliyun/alibabacloud-agent-toolkit": true
 }
