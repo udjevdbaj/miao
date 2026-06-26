@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-06-25T22:11:46.105161+00:00",
-  "_scan_count": 49,
+  "_last_scan": "2026-06-26T08:35:22.917924+00:00",
+  "_scan_count": 50,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -229,5 +229,6 @@
   "aliyun/maxcompute-semantic": true,
   "aliyun/alibabacloud-agent-toolkit": true,
   "Tencent/teamai-cli": true,
-  "alibaba/loongcollector": true
+  "alibaba/loongcollector": true,
+  "PaddlePaddle/PaConvert": true
 }
