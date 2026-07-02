@@ -68,23 +68,48 @@ def api_get(token: str, url: str, retries: int = 3) -> dict | list | None:
     for attempt in range(retries):
         try:
             resp = requests.get(url, headers=headers, timeout=60)
-            if resp.status_code == 403:
-                reset = int(resp.headers.get("X-RateLimit-Reset", 0))
-                wait = max(reset - int(time.time()), 10)
-                print(f"    [RATE LIMIT] waiting {wait}s...")
-                time.sleep(wait)
-                continue
-            if resp.status_code == 404:
-                return None
-            if resp.status_code == 401:
-                print(f"    [AUTH] Token lacks required scope for {url}")
-                return None
-            if resp.status_code != 200:
-                return None
-            return resp.json()
         except requests.exceptions.RequestException:
             if attempt < retries - 1:
                 time.sleep(3)
+            continue
+
+        # Transient server errors / secondary rate limit → retry with backoff
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt < retries - 1:
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            return None
+
+        # Rate limit: only sleep on an explicit signal; a permission-denied 403
+        # must NOT trigger a long sleep. Wait capped at 300s (6h job ceiling).
+        if resp.status_code == 403:
+            remaining = resp.headers.get("X-RateLimit-Remaining")
+            body_msg = ""
+            try:
+                body_msg = resp.json().get("message", "")
+            except ValueError:
+                pass
+            if remaining == "0" or "rate limit" in body_msg.lower():
+                if attempt >= retries - 1:
+                    return None  # last attempt — don't sleep 300s just to exit the loop
+                reset = int(resp.headers.get("X-RateLimit-Reset", 0))
+                wait = min(max(reset - int(time.time()), 10), 300)
+                print(f"    [RATE LIMIT] waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            return None  # genuine 403 forbidden (e.g. not admin on target repo)
+
+        if resp.status_code == 404:
+            return None
+        if resp.status_code == 401:
+            print(f"    [AUTH] Token lacks required scope for {url}")
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
     return None
 
 

@@ -193,10 +193,28 @@
     {
       "name": "PUBPRT",
       "query": "npm+publish+pull_request_target"
-    }
+    },
+    {"name": "HELM", "query": "helm+values+pull_request_target+runs-on"},
+    {"name": "ARGOCD", "query": "argocd+pull_request_target+runs-on"},
+    {"name": "FLUX", "query": "flux+helmrelease+pull_request_target+runs-on"},
+    {"name": "AICLAUDE", "query": "claude-code-action+pull_request_target"},
+    {"name": "AICLAUDESEC", "query": "claude-code-action+secrets"},
+    {"name": "AIQODO", "query": "qodo-ai+pull_request_target"},
+    {"name": "AIGEMINI", "query": "gemini-code-assist+pull_request_target"},
+    {"name": "AISOURCERY", "query": "sourcery+pull_request_target"},
+    {"name": "DYNJINJA", "query": "@jinja+secrets+language:Python"},
+    {"name": "DYNJSON", "query": "@json+secrets+language:Python"},
+    {"name": "OIDCPR", "query": "id-token+pull_request+runs-on"},
+    {"name": "OIDCWFR", "query": "id-token+workflow_run+runs-on"},
+    {"name": "OIDCWA", "query": "write-all+pull_request_target+runs-on"},
+    {"name": "PUBTWINE", "query": "twine+publish+pull_request_target"},
+    {"name": "PUBCARGO", "query": "cargo+publish+pull_request_target"},
+    {"name": "PUBMVN", "query": "mvn+deploy+pull_request_target"},
+    {"name": "PUBGEM", "query": "gem+push+pull_request_target"},
+    {"name": "PUBNUGET", "query": "nuget+push+pull_request_target"}
   ],
   "settings": {
-    "sleep_between_requests": 8,
+    "sleep_between_requests": 5,
     "max_retries": 5,
     "rate_limit_wait": 45
   }

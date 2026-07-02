@@ -75,20 +75,47 @@ def api_get(token: str, url: str, retries: int = 3) -> dict | list | None:
     for attempt in range(retries):
         try:
             resp = requests.get(url, headers=headers, timeout=60)
-            if resp.status_code == 403:
-                reset = int(resp.headers.get("X-RateLimit-Reset", 0))
-                wait = max(reset - int(time.time()), 10)
-                print(f"    [RATE LIMIT] waiting {wait}s...")
-                time.sleep(wait)
-                continue
-            if resp.status_code in (404, 401):
-                return None
-            if resp.status_code != 200:
-                return None
-            return resp.json()
         except requests.exceptions.RequestException:
             if attempt < retries - 1:
                 time.sleep(3)
+            continue
+
+        # Transient server errors / secondary rate limit → retry with backoff
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt < retries - 1:
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            return None
+
+        # Rate limit: only sleep when GitHub actually signals it (Remaining: 0
+        # or an explicit rate-limit message). A permission-denied 403 has no
+        # reset header and must NOT trigger a multi-minute sleep that blows the
+        # 6h job ceiling. Wait is capped at 300s for the same reason.
+        if resp.status_code == 403:
+            remaining = resp.headers.get("X-RateLimit-Remaining")
+            body_msg = ""
+            try:
+                body_msg = resp.json().get("message", "")
+            except ValueError:
+                pass
+            if remaining == "0" or "rate limit" in body_msg.lower():
+                if attempt >= retries - 1:
+                    return None  # last attempt — don't sleep 300s just to exit the loop
+                reset = int(resp.headers.get("X-RateLimit-Reset", 0))
+                wait = min(max(reset - int(time.time()), 10), 300)
+                print(f"    [RATE LIMIT] waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            return None  # genuine 403 forbidden (e.g. not admin on target repo)
+
+        if resp.status_code in (404, 401):
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
     return None
 
 
@@ -104,6 +131,8 @@ def analyze_workflow(filename: str, content: str) -> dict:
         "secrets_used": set(),
         "runner_types": set(),
         "checkout_pr_code": False,
+        "persist_creds_retained": False,
+        "hardcoded_credentials": [],
         "expression_injection": [],
         "permissions": None,
         "mutable_actions": [],       # Actions using mutable tags (not SHA-pinned)
@@ -187,6 +216,20 @@ def analyze_workflow(filename: str, content: str) -> dict:
     # Secrets usage
     secrets_found = re.findall(r"\$\{\{\s*secrets\.(\w+)\s*\}\}", raw)
     result["secrets_used"] = set(secrets_found)
+
+    # Hardcoded credential literals (#9 maintainer-account-takeover primitive) —
+    # a leaked PAT/cloud key in a run: block is full account takeover, not just
+    # a generic "secret exposure".
+    HARDCODED_CREDS = [
+        (r"\bgh[pousr]_[A-Za-z0-9]{36}\b", "GitHub PAT (gh*_)"),
+        (r"\bgithub_pat_[A-Za-z0-9_]{82}\b", "GitHub fine-grained PAT"),
+        (r"\bAKIA[0-9A-Z]{16}\b", "AWS access key (AKIA)"),
+        (r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "Slack token (xox)"),
+    ]
+    for pat, name in HARDCODED_CREDS:
+        if re.search(pat, raw):
+            result["hardcoded_credentials"].append(name)
+            result["details"].append(f"Hardcoded credential: {name} — account/cloud takeover")
 
     # Expression injection patterns
     injections = re.findall(r"\$\{\{\s*github\.event\.([^\}]+)\}\}", raw)
@@ -293,6 +336,7 @@ def analyze_workflow(filename: str, content: str) -> dict:
 
                     persist_creds = with_config.get("persist-credentials", True)
                     if persist_creds is not False:
+                        result["persist_creds_retained"] = True
                         result["details"].append(
                             f"Checkout retains credentials (persist-credentials not false)"
                         )
@@ -388,10 +432,15 @@ def analyze_workflow(filename: str, content: str) -> dict:
     if has_ic and has_self_hosted:
         if result["user_gate"]:
             result["risk_score"] += 30
-            result["verdict"] = "POTENTIAL (user gate)"
+            # Guard like the WFR/PR blocks: a combined PRT+IC workflow is the
+            # most dangerous config (PRT already set CRITICAL above); don't let
+            # the IC block demote it to POTENTIAL/HIGH.
+            if result["verdict"] == "UNKNOWN":
+                result["verdict"] = "POTENTIAL (user gate)"
         else:
             result["risk_score"] += 70
-            result["verdict"] = "HIGH (0-click script injection)"
+            if result["verdict"] == "UNKNOWN":
+                result["verdict"] = "HIGH (0-click script injection)"
 
     if has_wfr and has_self_hosted:
         result["risk_score"] += 35
@@ -435,6 +484,23 @@ def analyze_workflow(filename: str, content: str) -> dict:
         if result["verdict"] not in ("CRITICAL (0-click RCE possible)", "HIGH (0-click script injection)"):
             result["verdict"] = "HIGH (TOCTOU race condition)"
 
+    # TOCTOU PR variant (#13): returning-contributor pull_request + checkout PR
+    # code + persist-credentials retained → the approver-time SHA can be
+    # force-pushed before the job reads it (ActionsTOCTOU). Independent of
+    # issue_comment, which the original detector above required.
+    if has_pr and result["checkout_pr_code"] and result["persist_creds_retained"]:
+        result["risk_score"] += 20
+        result["details"].append(
+            "TOCTOU risk: pull_request + checkout PR code + persist-credentials — SHA-replacement window"
+        )
+        if result["verdict"] not in (
+            "CRITICAL (0-click RCE possible)",
+            "HIGH (0-click script injection)",
+            "HIGH (TOCTOU race condition)",
+            "CRITICAL (hardcoded credential — account takeover)",
+        ):
+            result["verdict"] = "POTENTIAL (PR SHA-replacement TOCTOU)"
+
     # OIDC token risk
     if result["has_oidc"] and (has_prt or has_pr or has_ic):
         result["risk_score"] += 20
@@ -473,6 +539,21 @@ def analyze_workflow(filename: str, content: str) -> dict:
     if result["secrets_used"]:
         result["risk_score"] += 10 * min(len(result["secrets_used"]), 5)
         result["details"].append(f"Secrets exposed: {', '.join(sorted(result['secrets_used']))}")
+        # High-value secret names (write/deploy/admin/publish scope) — bigger blast radius
+        HIGH_VALUE_SECRET = re.compile(r"(PAT|TOKEN|DEPLOY|ADMIN|WRITE|NPM_TOKEN|PYPI_TOKEN|CARGO_TOKEN|AWS|SECRET_KEY|ACCESS_KEY)", re.I)
+        hv = [s for s in result["secrets_used"] if HIGH_VALUE_SECRET.search(s)]
+        if hv:
+            result["risk_score"] += 10 * min(len(hv), 3)
+            result["details"].append(f"High-value secret names: {', '.join(hv)}")
+
+    # Hardcoded credential literals — account/cloud takeover primitive (#9)
+    if result["hardcoded_credentials"]:
+        result["risk_score"] += 30 * min(len(result["hardcoded_credentials"]), 3)
+        result["details"].append(
+            f"CRITICAL: hardcoded credentials in workflow ({', '.join(result['hardcoded_credentials'])}) — full account takeover"
+        )
+        if "CRITICAL" not in result["verdict"]:
+            result["verdict"] = "CRITICAL (hardcoded credential — account takeover)"
 
     # AI review tool detection — additional attack vector (#6)
     # AI tools can be prompted via PR body/diff to approve malicious code
@@ -549,6 +630,54 @@ def check_none_approval(token: str, repo: str) -> dict:
     return result
 
 
+# AI config files that can carry hidden prompt-injection payloads (#10)
+AI_CONFIG_FILES = (".cursorrules", "CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md")
+# zero-width chars used to obfuscate hidden instructions
+_ZWCLASS = "​‌‍﻿­⁠"
+AI_INJECTION_PATTERNS = [
+    (re.compile(f"[{_ZWCLASS}]"), "zero-width character (hidden prompt obfuscation)"),
+    (re.compile(r"ignore\s+(previous|prior|above|all)\s+(instructions?|rules?|directives?)", re.I), "prompt-override marker"),
+    (re.compile(r"\b(system\s+prompt|override|new\s+instructions?|disregard)\s*:", re.I), "system/override directive"),
+    (re.compile(r"\b(curl|wget)\b\s+https?://", re.I), "possible exfil URL in AI config"),
+    (re.compile(r"[A-Za-z0-9+/]{80,}={0,2}"), "long base64 blob (possible hidden payload)"),
+]
+
+
+def _detect_ai_config(rotator: TokenRotator, repo: str) -> list[dict]:
+    """Fetch AI-agent config files and flag hidden prompt-injection payloads (#10)."""
+    import base64
+    risks = []
+    for path in AI_CONFIG_FILES:
+        token = rotator.next()
+        data = api_get(token, f"{API}/repos/{repo}/contents/{path}")
+        if not isinstance(data, dict) or not data.get("content"):
+            continue
+        try:
+            content = base64.b64decode(data["content"]).decode("utf-8", "replace")
+        except Exception:
+            continue
+        for rx, desc in AI_INJECTION_PATTERNS:
+            if rx.search(content):
+                risks.append({"path": path, "desc": desc})
+        time.sleep(0.3)
+    return risks
+
+
+def _detect_helm(rotator: TokenRotator, repo: str) -> list[dict]:
+    """Confirm a Helm chart and flag PR-triggered render injection risk (#14).
+
+    The discovery query already gated on helm+pull_request_target+runs-on, so a
+    present Chart.yaml means values.yaml is rendered on a PR-triggered runner —
+    the Synacktiv 'Charting your way in' cluster-takeover primitive.
+    """
+    for path in ("Chart.yaml", "helm/Chart.yaml", "chart/Chart.yaml", "charts/Chart.yaml"):
+        token = rotator.next()
+        data = api_get(token, f"{API}/repos/{repo}/contents/{path}")
+        if isinstance(data, dict) and data.get("content"):
+            return [{"path": path, "desc": "Helm chart present + PR-triggered runner → values.yaml injectable (cluster-tier)"}]
+    return []
+
+
 def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str], query_labels: list[str] | None = None) -> dict:
     """Full analysis of a single repo."""
     token = rotator.next()
@@ -620,6 +749,25 @@ def analyze_repo(rotator: TokenRotator, repo: str, trigger_types: list[str], que
     result["ai_review_tools"] = list(dict.fromkeys(result["ai_review_tools"]))
     result["publish_tools"] = list(dict.fromkeys(result["publish_tools"]))
 
+    # Helm template injection (#14) — only for repos surfaced by Helm/ArgoCD/Flux queries
+    labels = set(result.get("query_labels") or [])
+    if labels & {"HELM", "ARGOCD", "FLUX"}:
+        helm_risks = _detect_helm(rotator, repo)
+        if helm_risks:
+            result["helm_risks"] = helm_risks
+            result["highest_risk"] += 40
+            if "CRITICAL" not in result["verdict"] and "HIGH" not in result["verdict"]:
+                result["verdict"] = "HIGH (Helm template injection → cluster compromise)"
+
+    # AI config-file injection (#10) — repos running an AI agent or surfaced by AI queries
+    if (labels & {"AICLAUDE", "AICLAUDESEC", "AIQODO", "AIGEMINI", "AISOURCERY"}) or result.get("has_ai_review"):
+        ai_cfg_risks = _detect_ai_config(rotator, repo)
+        if ai_cfg_risks:
+            result["ai_config_risks"] = ai_cfg_risks
+            result["highest_risk"] += 30
+            if "CRITICAL" not in result["verdict"] and "HIGH" not in result["verdict"]:
+                result["verdict"] = "HIGH (AI config-file injection / prompt injection)"
+
     # For PR-only repos with self-hosted (no PRT/IC/WFR), check NONE user approval history
     if result["has_self_hosted"] and not result["has_prt"] and not result["has_ic"] and not result["has_wfr"]:
         token = rotator.next()
@@ -652,6 +800,18 @@ def run_analysis(scan_results: dict, rotator: TokenRotator) -> dict:
         "AIREV": "pull_request_target",
         "PUBPRT": "pull_request_target",
         "DYNF": "pull_request_target", "DYNJ": "pull_request_target", "DYNL": "pull_request_target",
+        # Helm template injection (#14) — render gate is pull_request_target-shaped
+        "HELM": "pull_request_target", "ARGOCD": "pull_request_target", "FLUX": "pull_request_target",
+        # AI review tools (#6)
+        "AICLAUDE": "pull_request_target", "AICLAUDESEC": "pull_request_target",
+        "AIQODO": "pull_request_target", "AIGEMINI": "pull_request_target", "AISOURCERY": "pull_request_target",
+        # Dynaconf @jinja/@json (#11)
+        "DYNJINJA": "pull_request_target", "DYNJSON": "pull_request_target",
+        # OIDC additional triggers (#7)
+        "OIDCPR": "pull_request", "OIDCWFR": "workflow_run", "OIDCWA": "pull_request_target",
+        # Worm ecosystems (#8)
+        "PUBTWINE": "pull_request_target", "PUBCARGO": "pull_request_target", "PUBMVN": "pull_request_target",
+        "PUBGEM": "pull_request_target", "PUBNUGET": "pull_request_target",
     }
 
     # Deduplicate repos

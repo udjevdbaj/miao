@@ -19,12 +19,25 @@ permissions:
   contents: write
   actions: read
 
+# Prevent two scheduled runs from racing the baseline commit (lost update).
+concurrency:
+  group: baseline-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # Bound the run so an unbounded rate-limit wait can't hit the 6h ceiling
+    # and lose all progress (api_get also caps rate-limit sleeps at 300s).
+    timeout-minutes: 240
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the baseline `git pull --rebase` retry loop can
+          # find a common ancestor — a depth-1 clone breaks rebase and the
+          # push failure is silently swallowed by exit 0.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -126,14 +139,23 @@ jobs:
           fi
 
       # ── Commit baseline update ──
+      # if: always() so a transient earlier-phase failure still persists whatever
+      # baseline progress was made; retry loop so concurrent runs don't silently
+      # lose the update (was: `git push || echo` swallowed conflicts).
       - name: Commit baseline update
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add baselines/baseline.json
           git diff --cached --quiet || git commit -m "baseline: $(date -u +%Y-%m-%dT%H:%M)"
-          git pull --rebase origin main || true
-          git push || echo "Push skipped (concurrent update)"
+          for i in 1 2 3; do
+            git pull --rebase origin main || git rebase --abort
+            if git push; then exit 0; fi
+            sleep 5
+          done
+          echo "::warning::Baseline push failed after 3 attempts; update not persisted this run"
+          exit 0
 
       # ── Email Notifications ──
       - name: Send scan notification
@@ -143,6 +165,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: |
+          [ -f scan_results.json ] || { echo "scan_results.json missing — skipping notify"; exit 0; }
           python scanner/notify.py \
             --input scan_results.json \
             --summary scan_summary.txt \
@@ -155,6 +178,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: |
+          [ -f analysis_report.json ] || { echo "analysis_report.json missing — skipping notify"; exit 0; }
           python scanner/analysis_notify.py \
             --input analysis_report.json \
             --summary analysis_summary.txt \

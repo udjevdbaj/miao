@@ -45,11 +45,31 @@ def search_code(token: str, query: str, org: str) -> dict:
     }
     # Must use raw URL, NOT params dict — requests encodes '+' as '%2B' which breaks GitHub search
     url = f"{API_URL}?q={full_query}&per_page={PER_PAGE}"
-    resp = requests.get(url, headers=headers, timeout=30)
-    data = resp.json()
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+    except requests.exceptions.RequestException as e:
+        return {"error": f"network:{type(e).__name__}"}
 
-    if resp.status_code == 403 or "rate limit" in data.get("message", "").lower():
-        return {"error": "rate_limited"}
+    # Check status BEFORE parsing: GitHub (or an intermediary) can return a
+    # non-JSON 5xx/HTML body, which would raise JSONDecodeError and crash the
+    # whole scan. Fall back to {} body only to extract an error message.
+    if resp.status_code != 200:
+        try:
+            msg = resp.json().get("message", "")
+        except ValueError:
+            msg = ""
+        if resp.status_code == 403 or "rate limit" in msg.lower():
+            return {
+                "error": "rate_limited",
+                "reset": resp.headers.get("X-RateLimit-Reset"),
+                "retry_after": resp.headers.get("Retry-After"),
+            }
+        return {"error": (msg or f"http_{resp.status_code}")[:80]}
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return {"error": "invalid_json"}
 
     if "total_count" not in data:
         return {"error": data.get("message", "unknown")[:80]}
@@ -78,7 +98,19 @@ def search_with_retry(
         result = search_code(token, query, org)
 
         if result.get("error") == "rate_limited":
-            backoff = wait + (attempt - 1) * 15  # 45, 60, 75, 90, 105
+            # Prefer server-provided wait (Retry-After in seconds, or Reset
+            # epoch), capped at 300s so a far-future reset can't blow the 6h
+            # job ceiling. Fall back to fixed backoff only if GitHub sent
+            # neither header.
+            srv_wait = None
+            ra = result.get("retry_after")
+            if ra and ra.isdigit():
+                srv_wait = min(int(ra), 300)
+            if srv_wait is None:
+                rst = result.get("reset")
+                if rst and rst.isdigit():
+                    srv_wait = min(max(int(rst) - int(time.time()), 10), 300)
+            backoff = srv_wait if srv_wait is not None else min(wait + (attempt - 1) * 15, 300)
             print(f"  [RATE LIMIT] attempt {attempt}/{max_retries}, token rotated, waiting {backoff}s...")
             time.sleep(backoff)
             continue
@@ -89,6 +121,7 @@ def search_with_retry(
 
         return result
 
+    print(f"  [ERROR] max_retries_exceeded — {org} (query abandoned, results incomplete)")
     return {"error": "max_retries_exceeded"}
 
 
