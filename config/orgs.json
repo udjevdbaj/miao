@@ -214,7 +214,7 @@
     {"name": "PUBNUGET", "query": "nuget+push+pull_request_target"}
   ],
   "settings": {
-    "sleep_between_requests": 5,
+    "sleep_between_requests": 3,
     "max_retries": 5,
     "rate_limit_wait": 45
   }

@@ -27,9 +27,11 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # Bound the run so an unbounded rate-limit wait can't hit the 6h ceiling
-    # and lose all progress (api_get also caps rate-limit sleeps at 300s).
-    timeout-minutes: 240
+    # NOTE: no tight timeout-minutes here. api_get already caps each
+    # rate-limit sleep at 300s, so the run can't hang on a single call.
+    # A 240m job ceiling was too tight — with 33 discovery queries the scan
+    # phase alone runs 3-4h — and it cancelled healthy scheduled runs
+    # (GitHub's default 360m / 6h upper bound is the right ceiling).
 
     steps:
       - uses: actions/checkout@v4
