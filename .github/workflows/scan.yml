@@ -142,17 +142,29 @@ jobs:
 
       # ── Commit baseline update ──
       # if: always() so a transient earlier-phase failure still persists whatever
-      # baseline progress was made; retry loop so concurrent runs don't silently
-      # lose the update (was: `git push || echo` swallowed conflicts).
+      # baseline progress was made. On rebase conflict (another concurrent run
+      # pushed first), reset to remote main and re-apply this run's findings via
+      # merge_baseline.py — neither run loses data.
       - name: Commit baseline update
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -f scan_results.json ] || { echo "no scan_results.json — nothing to baseline"; exit 0; }
           git add baselines/baseline.json
           git diff --cached --quiet || git commit -m "baseline: $(date -u +%Y-%m-%dT%H:%M)"
           for i in 1 2 3; do
-            git pull --rebase origin main || git rebase --abort
+            if git pull --rebase origin main; then
+              :
+            else
+              git rebase --abort
+              echo "::notice::Baseline conflict — re-merging this run's findings on top of remote main"
+              git fetch origin main
+              git reset --hard origin/main
+              python3 scanner/merge_baseline.py baselines/baseline.json scan_results.json
+              git add baselines/baseline.json
+              git commit -m "baseline: $(date -u +%Y-%m-%dT%H:%M) (merged with remote)"
+            fi
             if git push; then exit 0; fi
             sleep 5
           done
