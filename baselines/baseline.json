@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-07-06T09:10:39.533434+00:00",
-  "_scan_count": 64,
+  "_last_scan": "2026-07-06T19:05:08.658217+00:00",
+  "_scan_count": 65,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -266,5 +266,6 @@
   "nacos-group/nacos-controller": true,
   "openharmony/third_party_pcre2": true,
   "opentiny/opentiny.design": true,
-  "opentiny/playground": true
+  "opentiny/playground": true,
+  "btraceio/btrace": true
 }
