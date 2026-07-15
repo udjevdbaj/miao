@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-07-15T07:23:52.124925+00:00",
-  "_scan_count": 72,
+  "_last_scan": "2026-07-15T18:19:38.063919+00:00",
+  "_scan_count": 73,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -270,5 +270,6 @@
   "btraceio/btrace": true,
   "bytedance/laqx": true,
   "Tencent/tdesign-icons": true,
-  "modelscope/FunASR": true
+  "modelscope/FunASR": true,
+  "alibaba/yalantinglibs": true
 }
