@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-07-21T07:42:14.139890+00:00",
-  "_scan_count": 84,
+  "_last_scan": "2026-07-21T18:40:31.273358+00:00",
+  "_scan_count": 85,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -275,5 +275,6 @@
   "openkruise/agentio": true,
   "Tencent/YOLO-Master": true,
   "aliyun/elastic-compute-control-cli": true,
-  "modelscope/evalscope": true
+  "modelscope/evalscope": true,
+  "Tencent/tencent-goosefs-rust-sdk": true
 }
