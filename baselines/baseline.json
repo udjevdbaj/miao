@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-07-30T07:42:32.865056+00:00",
-  "_scan_count": 102,
+  "_last_scan": "2026-07-30T18:46:12.147321+00:00",
+  "_scan_count": 103,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -280,5 +280,6 @@
   "oceanbase/oceanbase-design": true,
   "kvcache-ai/AgentENV": true,
   "Tencent/WeKnora": true,
-  "TencentCloud/Octop": true
+  "TencentCloud/Octop": true,
+  "kvcache-ai/firecracker": true
 }
