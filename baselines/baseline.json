@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-08-06T07:48:47.485433+00:00",
-  "_scan_count": 116,
+  "_last_scan": "2026-08-07T06:18:58.085629+00:00",
+  "_scan_count": 117,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -282,5 +282,6 @@
   "Tencent/WeKnora": true,
   "TencentCloud/Octop": true,
   "kvcache-ai/firecracker": true,
-  "huaweicloud/repository-requests": true
+  "huaweicloud/repository-requests": true,
+  "alibaba/MNN": true
 }
