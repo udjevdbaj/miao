@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-08-25T17:45:18.999584+00:00",
-  "_scan_count": 154,
+  "_last_scan": "2026-08-26T05:50:15.174404+00:00",
+  "_scan_count": 155,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -284,5 +284,6 @@
   "kvcache-ai/firecracker": true,
   "huaweicloud/repository-requests": true,
   "alibaba/MNN": true,
-  "TencentBlueKing/blueking-paas": true
+  "TencentBlueKing/blueking-paas": true,
+  "openkruise/agents": true
 }
