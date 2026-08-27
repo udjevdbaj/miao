@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-08-26T19:18:14.365894+00:00",
-  "_scan_count": 156,
+  "_last_scan": "2026-08-27T16:31:04.908530+00:00",
+  "_scan_count": 157,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -285,5 +285,6 @@
   "huaweicloud/repository-requests": true,
   "alibaba/MNN": true,
   "TencentBlueKing/blueking-paas": true,
-  "openkruise/agents": true
+  "openkruise/agents": true,
+  "baidubce/dumate-bench": true
 }
