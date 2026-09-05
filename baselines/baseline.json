@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-09-05T09:05:44.896560+00:00",
-  "_scan_count": 174,
+  "_last_scan": "2026-09-05T19:01:56.608343+00:00",
+  "_scan_count": 175,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -287,5 +287,6 @@
   "TencentBlueKing/blueking-paas": true,
   "openkruise/agents": true,
   "baidubce/dumate-bench": true,
-  "volcengine/c2patool": true
+  "volcengine/c2patool": true,
+  "Tencent/puerts": true
 }
