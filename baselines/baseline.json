@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-09-10T09:45:09.167617+00:00",
-  "_scan_count": 184,
+  "_last_scan": "2026-09-10T19:42:22.261493+00:00",
+  "_scan_count": 185,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -294,5 +294,6 @@
   "volcengine/ark-runtime-go": true,
   "TencentBlueKing/bamboo-engine": true,
   "alibaba/xquic": true,
-  "volcengine/ark-runtime-python": true
+  "volcengine/ark-runtime-python": true,
+  "kvcache-ai/ktransformers": true
 }
