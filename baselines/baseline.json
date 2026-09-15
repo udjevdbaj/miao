@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-09-14T20:56:54.290499+00:00",
-  "_scan_count": 193,
+  "_last_scan": "2026-09-15T10:05:12.578039+00:00",
+  "_scan_count": 194,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -295,5 +295,6 @@
   "TencentBlueKing/bamboo-engine": true,
   "alibaba/xquic": true,
   "volcengine/ark-runtime-python": true,
-  "kvcache-ai/ktransformers": true
+  "kvcache-ai/ktransformers": true,
+  "aliyun/alibabacloud-aiops-skills": true
 }
