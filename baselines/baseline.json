@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-10-07T21:59:01.806894+00:00",
-  "_scan_count": 239,
+  "_last_scan": "2026-10-08T12:02:13.071129+00:00",
+  "_scan_count": 240,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -297,5 +297,8 @@
   "volcengine/ark-runtime-python": true,
   "kvcache-ai/ktransformers": true,
   "aliyun/alibabacloud-aiops-skills": true,
-  "TencentCloud/octop-memory": true
+  "TencentCloud/octop-memory": true,
+  "TencentCloud/octop-harness": true,
+  "TencentCloud/octop-browser": true,
+  "TencentCloud/octop-gateway": true
 }
