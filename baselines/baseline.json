@@ -1,7 +1,7 @@
 {
   "_created": "",
-  "_last_scan": "2026-10-09T21:41:06.260356+00:00",
-  "_scan_count": 243,
+  "_last_scan": "2026-10-10T11:11:01.946715+00:00",
+  "_scan_count": 244,
   "bytedance/terarkdb": true,
   "bytedance/byteir": true,
   "bytedance/mona": true,
@@ -301,5 +301,6 @@
   "TencentCloud/octop-harness": true,
   "TencentCloud/octop-browser": true,
   "TencentCloud/octop-gateway": true,
-  "TencentBlueKing/bk-nodemgr": true
+  "TencentBlueKing/bk-nodemgr": true,
+  "aliyun/ai-agent-handbook": true
 }
